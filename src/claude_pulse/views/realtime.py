@@ -1,23 +1,31 @@
-"""Real-time usage dashboard."""
+"""Real-time TUI dashboard — htop/btop style with responsive layout."""
 
 import time
 from datetime import datetime, timedelta
 
 from rich.console import Console, Group
+from rich.layout import Layout
 from rich.live import Live
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
 from claude_pulse.config import short_model_name
-from claude_pulse.cost import calculate_cost, format_cost, format_tokens
-from claude_pulse.data.history import get_daily_counts, load_history
+from claude_pulse.cost import calculate_cost_raw, format_cost, format_tokens
+from claude_pulse.data.conversations import (
+    get_daily_usage,
+    get_hourly_activity,
+    get_model_totals,
+    get_project_stats,
+    load_all_conversations,
+)
 from claude_pulse.data.sessions import get_active_sessions
-from claude_pulse.data.stats import load_stats
+
+
+# ── Helpers ──────────────────────────────────────────────────────────────────
 
 
 def _format_duration(ms: int) -> str:
-    """Format milliseconds to human-readable duration."""
     seconds = ms // 1000
     if seconds < 60:
         return f"{seconds}s"
@@ -28,121 +36,450 @@ def _format_duration(ms: int) -> str:
     return f"{hours}h {minutes % 60}m"
 
 
-def _build_display(console: Console) -> Group:
-    """Build the full realtime display."""
-    now = datetime.now()
-    stats = load_stats()
-    sessions = get_active_sessions()
+def _compact_cost(usd: float) -> str:
+    """Shorter cost format for tight spaces."""
+    if usd >= 100:
+        return f"${usd:.0f}"
+    if usd >= 10:
+        return f"${usd:.1f}"
+    if usd < 0.01:
+        return f"${usd:.3f}"
+    return f"${usd:.2f}"
 
-    # Header
-    status_parts = []
-    status_parts.append(f"[bold]{len(sessions)}[/bold] active session{'s' if len(sessions) != 1 else ''}")
-    status_parts.append(f"Updated: {now.strftime('%I:%M:%S %p')}")
-    header = Panel(
-        Text.from_markup("  |  ".join(status_parts)),
-        title="[bold cyan]Claude Pulse[/bold cyan]",
-        border_style="cyan",
-        padding=(0, 2),
+
+# ── Panel Builders ───────────────────────────────────────────────────────────
+
+
+def _build_header(sessions: list, now: datetime, total_cost: float, today_msgs: int, width: int) -> Panel:
+    parts = []
+    parts.append(f"[bold green]●[/bold green] {len(sessions)} sess")
+    parts.append(f"[bold green]{today_msgs:,}[/bold green] today")
+    parts.append(f"[bold red]{format_cost(total_cost)}[/bold red] total")
+    if width >= 80:
+        parts.append(f"[dim]{now.strftime('%a %b %d  %I:%M:%S %p')}[/dim]")
+    else:
+        parts.append(f"[dim]{now.strftime('%I:%M:%S %p')}[/dim]")
+
+    sep = "  " if width < 80 else "    "
+    return Panel(
+        Text.from_markup(sep.join(parts), justify="center"),
+        title="[bold cyan] Claude Pulse [/bold cyan]",
+        border_style="bold cyan",
+        padding=(0, 0),
     )
 
-    # Active sessions table
-    session_table = Table(
-        title="Active Sessions",
-        title_style="bold white",
-        padding=(0, 1),
-        show_lines=False,
+
+def _build_sessions_panel(sessions: list, now: datetime, compact: bool = False) -> Panel:
+    table = Table(
+        show_header=True, header_style="bold",
+        padding=(0, 1), show_lines=False, expand=True,
     )
-    session_table.add_column("PID", style="dim", justify="right", min_width=6)
-    session_table.add_column("Project", style="bold green", min_width=16)
-    session_table.add_column("Duration", justify="right", style="cyan", min_width=10)
-    session_table.add_column("Type", style="yellow", min_width=8)
+    if compact:
+        table.add_column("Project", style="bold green", no_wrap=True, overflow="ellipsis")
+        table.add_column("Dur", justify="right", style="cyan")
+    else:
+        table.add_column("PID", style="dim", justify="right", ratio=1)
+        table.add_column("Project", style="bold green", ratio=3, no_wrap=True, overflow="ellipsis")
+        table.add_column("Duration", justify="right", style="cyan", ratio=2)
 
     if sessions:
+        now_ms = int(now.timestamp() * 1000)
         for s in sessions:
-            now_ms = int(now.timestamp() * 1000)
-            duration = _format_duration(now_ms - s.started_at) if s.started_at else "—"
-            kind = s.kind or s.entrypoint or "interactive"
-            session_table.add_row(str(s.pid), s.project_name or s.cwd, duration, kind)
+            dur = _format_duration(now_ms - s.started_at) if s.started_at else "—"
+            proj = s.project_name or s.cwd
+            if compact:
+                table.add_row(proj, dur)
+            else:
+                table.add_row(str(s.pid), proj, dur)
     else:
-        session_table.add_row("—", "[dim]No active sessions[/dim]", "—", "—")
+        if compact:
+            table.add_row("[dim]None[/dim]", "—")
+        else:
+            table.add_row("—", "[dim]No active sessions[/dim]", "—")
 
-    # Token usage table
-    token_table = Table(
-        title="Token Usage (All Time)",
-        title_style="bold white",
-        padding=(0, 1),
-        show_lines=False,
+    return Panel(table, title="[bold] Sessions [/bold]", border_style="green", padding=(0, 0))
+
+
+def _build_tokens_panel(model_totals: dict, compact: bool = False) -> Panel:
+    table = Table(
+        show_header=True, header_style="bold",
+        padding=(0, 1), show_lines=False, expand=True,
     )
-    token_table.add_column("Model", style="bold", min_width=14)
-    token_table.add_column("Input", justify="right", style="green", min_width=10)
-    token_table.add_column("Output", justify="right", style="blue", min_width=10)
-    token_table.add_column("Cache Read", justify="right", style="yellow", min_width=12)
-    token_table.add_column("Cache Write", justify="right", style="yellow", min_width=12)
-    token_table.add_column("Est. Cost", justify="right", style="bold red", min_width=10)
+
+    if compact:
+        table.add_column("Model", style="bold", no_wrap=True, overflow="ellipsis")
+        table.add_column("Out", justify="right", style="blue")
+        table.add_column("$", justify="right", style="bold red")
+    else:
+        table.add_column("Model", style="bold", ratio=2, no_wrap=True, overflow="ellipsis")
+        table.add_column("Input", justify="right", style="green", ratio=1)
+        table.add_column("Output", justify="right", style="blue", ratio=1)
+        table.add_column("Cache R", justify="right", style="yellow", ratio=1)
+        table.add_column("Cache W", justify="right", style="yellow", ratio=1)
+        table.add_column("Cost", justify="right", style="bold red", min_width=7)
 
     total_cost = 0.0
-    if stats and stats.model_usage:
-        for model_id, usage in stats.model_usage.items():
-            cost = calculate_cost(usage)
-            total_cost += cost
-            token_table.add_row(
+    for model_id, tokens in model_totals.items():
+        if sum(tokens.values()) == 0:
+            continue
+        cost = calculate_cost_raw(
+            model_id,
+            tokens["input_tokens"], tokens["output_tokens"],
+            tokens["cache_read_tokens"], tokens["cache_create_tokens"],
+        )
+        total_cost += cost
+        if compact:
+            table.add_row(
                 short_model_name(model_id),
-                format_tokens(usage.input_tokens),
-                format_tokens(usage.output_tokens),
-                format_tokens(usage.cache_read_tokens),
-                format_tokens(usage.cache_create_tokens),
+                format_tokens(tokens["output_tokens"]),
+                _compact_cost(cost),
+            )
+        else:
+            table.add_row(
+                short_model_name(model_id),
+                format_tokens(tokens["input_tokens"]),
+                format_tokens(tokens["output_tokens"]),
+                format_tokens(tokens["cache_read_tokens"]),
+                format_tokens(tokens["cache_create_tokens"]),
                 format_cost(cost),
             )
-    else:
-        token_table.add_row("—", "—", "—", "—", "—", "—")
 
-    # Today's activity
-    today_entries = load_history(since=datetime.now().replace(hour=0, minute=0, second=0))
-    today_sessions = len({e.session_id for e in today_entries if e.session_id})
+    active_models = sum(1 for t in model_totals.values() if sum(t.values()) > 0)
+    if active_models > 1:
+        if compact:
+            table.add_row("[bold]TOTAL[/bold]", "", f"[bold red]{_compact_cost(total_cost)}[/bold red]")
+        else:
+            table.add_row("[bold]TOTAL[/bold]", "", "", "", "", f"[bold red]{format_cost(total_cost)}[/bold red]")
 
-    # Recent days sparkline (last 7 days)
-    daily = get_daily_counts(days=7)
-    max_msgs = max((d["messages"] for d in daily), default=1) or 1
-    bars = "▁▂▃▄▅▆▇█"
-    sparkline = ""
+    return Panel(table, title="[bold] Tokens [/bold]", border_style="blue", padding=(0, 0))
+
+
+def _build_daily_chart(daily: list, hours: list, width: int) -> Panel:
+    values = [d["messages"] for d in daily]
+    costs = []
     for d in daily:
-        idx = min(int(d["messages"] / max_msgs * (len(bars) - 1)), len(bars) - 1)
-        sparkline += bars[idx]
+        models = d.get("models", set())
+        model = next(iter(models)) if models else "claude-sonnet-4-6"
+        c = calculate_cost_raw(
+            model, d["input_tokens"], d["output_tokens"],
+            d["cache_read_tokens"], d["cache_create_tokens"],
+        )
+        costs.append(c)
 
-    # Summary panel
-    summary_parts = []
-    summary_parts.append(f"[bold green]{len(today_entries)}[/bold green] messages today")
-    summary_parts.append(f"[bold blue]{today_sessions}[/bold blue] sessions today")
-    if stats:
-        summary_parts.append(f"[bold]{stats.total_messages}[/bold] messages all time")
-        summary_parts.append(f"[bold]{stats.total_sessions}[/bold] sessions all time")
-    if total_cost > 0:
-        summary_parts.append(f"[bold red]{format_cost(total_cost)}[/bold red] total est. cost")
+    text = Text()
+    if not values:
+        text.append("  No data")
+        return Panel(text, title="[bold] Activity [/bold]", border_style="yellow")
 
-    summary_text = Text.from_markup("  •  ".join(summary_parts))
-    activity_text = Text.from_markup(f"  Last 7 days: [bold cyan]{sparkline}[/bold cyan]  ({', '.join(str(d['messages']) for d in daily)})")
+    max_val = max(values) or 1
+    panel_inner = max(width // 2 - 6, 20) if width >= 80 else max(width - 6, 15)
+    bar_width = max(panel_inner - 24, 8)
+    today_str = datetime.now().strftime("%m-%d")
+    total_cost = sum(costs)
+    total_msgs = sum(values)
+    show_cost = width >= 60
 
-    summary = Panel(
-        Group(summary_text, activity_text),
-        title="Summary",
-        border_style="dim",
-        padding=(0, 2),
+    for i, (day_data, cost) in enumerate(zip(reversed(daily), reversed(costs))):
+        val = day_data["messages"]
+        label = day_data["date"][-5:]
+        bar_len = int(val / max_val * bar_width) if max_val > 0 else 0
+        bar = "█" * bar_len
+        pad = "░" * (bar_width - bar_len) if val > 0 else " " * bar_width
+
+        is_today = label == today_str
+        text.append(f" {label} ", style="bold white" if is_today else "dim")
+        text.append(bar, style="bold green" if is_today else "green")
+        text.append(pad, style="dim green" if val > 0 else "dim")
+        text.append(f" {val:>4}", style="bold" if is_today else "")
+        if show_cost and cost > 0:
+            text.append(f" {_compact_cost(cost):>6}", style="red")
+        text.append("\n")
+
+    text.append(f" {'─' * min(bar_width + 18, 50)}\n", style="dim")
+    text.append(" ", style="dim")
+    text.append(f"{total_msgs:,}", style="bold green")
+    text.append(" msgs ", style="dim")
+    if show_cost:
+        text.append(f"{_compact_cost(total_cost)}", style="bold red")
+    text.append("\n\n")
+
+    # Hourly heatmap inline
+    max_h = max(hours) or 1
+    blocks = ["  ", "░░", "▒▒", "▓▓", "██"]
+
+    if width >= 80:
+        for row_label, start in [("AM", 0), ("PM", 12)]:
+            text.append(f" {row_label} ", style="dim")
+            for h in range(start, start + 12):
+                val = hours[h]
+                if val == 0:
+                    text.append("·· ", style="dim")
+                else:
+                    idx = max(1, min(int(val / max_h * 4), 4))
+                    style = "bold magenta" if val == max_h else ("magenta" if idx >= 3 else "cyan")
+                    text.append(f"{blocks[idx]} ", style=style)
+            text.append("\n")
+        text.append("    ", style="dim")
+        for h in range(12):
+            text.append(f"{h:<3}", style="dim")
+        text.append("\n")
+    else:
+        # Compact sparkline
+        bars = "▁▂▃▄▅▆▇█"
+        text.append(" Hr ", style="dim")
+        for h in range(24):
+            val = hours[h]
+            if val == 0:
+                text.append("·", style="dim")
+            else:
+                idx = max(1, min(int(val / max_h * 7), 7))
+                style = "bold magenta" if val == max_h else ("magenta" if idx >= 5 else "cyan")
+                text.append(bars[idx], style=style)
+        text.append("\n")
+        text.append("    0     6     12    18  23\n", style="dim")
+
+    peak_hour = hours.index(max(hours))
+    text.append(f" Peak ", style="dim")
+    text.append(f"{peak_hour:02d}:00", style="bold magenta")
+    text.append(f" ({max(hours)} msgs/7d)", style="dim")
+
+    return Panel(text, title="[bold] Activity [/bold]", border_style="yellow", padding=(0, 0))
+
+
+def _build_projects_panel(project_stats: list, compact: bool = False) -> Panel:
+    table = Table(
+        show_header=True, header_style="bold",
+        padding=(0, 1), show_lines=False, expand=True,
     )
 
-    return Group(header, "", session_table, "", token_table, "", summary)
+    if compact:
+        table.add_column("Project", style="bold", no_wrap=True, overflow="ellipsis")
+        table.add_column("Msgs", justify="right", style="green")
+        table.add_column("$", justify="right", style="red")
+    else:
+        table.add_column("Project", style="bold", ratio=3, no_wrap=True, overflow="ellipsis")
+        table.add_column("Msgs", justify="right", style="green", ratio=1)
+        table.add_column("Tools", justify="right", style="yellow", ratio=1)
+        table.add_column("Cost", justify="right", style="red", ratio=1)
+        table.add_column("Last", style="dim", ratio=2, no_wrap=True)
+
+    limit = 5 if compact else 8
+    for p in project_stats[:limit]:
+        last = p["last_active"][:10] if p["last_active"] else "—"
+        if compact:
+            table.add_row(p["project"], str(p["user_messages"]), _compact_cost(p["cost"]))
+        else:
+            table.add_row(p["project"], str(p["user_messages"]), str(p["tool_calls"]), format_cost(p["cost"]), last)
+
+    return Panel(table, title="[bold] Projects [/bold]", border_style="white", padding=(0, 0))
+
+
+def _build_stats_panel(conversations: list, total_cost: float, today_cost: float, compact: bool = False) -> Panel:
+    total_user = sum(c.user_messages for c in conversations)
+    total_assistant = sum(c.assistant_messages for c in conversations)
+    total_tools = sum(c.tool_calls for c in conversations)
+    total_output = sum(c.total_output_tokens for c in conversations)
+    total_cache = sum(c.total_cache_read_tokens for c in conversations)
+
+    text = Text()
+
+    if compact:
+        text.append(" Convos  ", style="dim")
+        text.append(f"{len(conversations):>6,}\n", style="bold")
+        text.append(" Prompts ", style="dim")
+        text.append(f"{total_user:>6,}\n", style="bold green")
+        text.append(" Tools   ", style="dim")
+        text.append(f"{total_tools:>6,}\n", style="bold yellow")
+        text.append(" Output  ", style="dim")
+        text.append(f"{format_tokens(total_output):>6}\n", style="bold")
+        text.append(" ─────────────\n", style="dim")
+        text.append(" Today   ", style="dim")
+        text.append(f"{_compact_cost(today_cost):>6}\n", style="bold red")
+        text.append(" Total   ", style="dim")
+        text.append(f"{_compact_cost(total_cost):>6}\n", style="bold red")
+    else:
+        text.append("  Conversations   ", style="dim")
+        text.append(f"{len(conversations):>8,}\n", style="bold")
+        text.append("  User Prompts    ", style="dim")
+        text.append(f"{total_user:>8,}\n", style="bold green")
+        text.append("  AI Responses    ", style="dim")
+        text.append(f"{total_assistant:>8,}\n", style="bold blue")
+        text.append("  Tool Calls      ", style="dim")
+        text.append(f"{total_tools:>8,}\n", style="bold yellow")
+        text.append("  Output Tokens   ", style="dim")
+        text.append(f"{format_tokens(total_output):>8}\n", style="bold")
+        text.append("  Cache Reads     ", style="dim")
+        text.append(f"{format_tokens(total_cache):>8}\n", style="bold")
+        text.append("  ─────────────────────\n", style="dim")
+        text.append("  Today's Cost    ", style="dim")
+        text.append(f"{format_cost(today_cost):>8}\n", style="bold red")
+        text.append("  Total Cost      ", style="dim")
+        text.append(f"{format_cost(total_cost):>8}\n", style="bold red")
+
+    return Panel(text, title="[bold] Stats [/bold]", border_style="cyan", padding=(0, 0))
+
+
+# ── Layout Builders ──────────────────────────────────────────────────────────
+
+
+def _build_wide(data: dict) -> Layout:
+    """Wide layout (120+): Stats+Tokens top, Activity+Sessions+Projects bottom."""
+    layout = Layout()
+    layout.split_column(
+        Layout(name="header", size=3),
+        Layout(name="upper", ratio=2),
+        Layout(name="lower", ratio=3),
+    )
+    layout["header"].update(data["header"])
+
+    # Upper: small Stats + big Tokens
+    layout["upper"].split_row(
+        Layout(name="stats", ratio=1),
+        Layout(name="tokens", ratio=3),
+    )
+    layout["stats"].update(data["stats"])
+    layout["tokens"].update(data["tokens"])
+
+    # Lower: Activity (daily+hours) left, Sessions+Projects right
+    layout["lower"].split_row(
+        Layout(name="daily", ratio=3),
+        Layout(name="right_col", ratio=3),
+    )
+    layout["daily"].update(data["daily"])
+    layout["right_col"].split_column(
+        Layout(name="sessions", ratio=1),
+        Layout(name="projects", ratio=2),
+    )
+    layout["sessions"].update(data["sessions"])
+    layout["projects"].update(data["projects"])
+
+    return layout
+
+
+def _build_medium(data: dict) -> Layout:
+    """Medium layout (80-119): 2-col stacked."""
+    layout = Layout()
+    layout.split_column(
+        Layout(name="header", size=3),
+        Layout(name="row1", ratio=2),
+        Layout(name="row2", ratio=3),
+        Layout(name="row3", ratio=2),
+    )
+    layout["header"].update(data["header"])
+
+    # Row 1: small Stats + big Tokens
+    layout["row1"].split_row(
+        Layout(name="stats", ratio=1),
+        Layout(name="tokens", ratio=2),
+    )
+    layout["stats"].update(data["stats"])
+    layout["tokens"].update(data["tokens"])
+
+    # Row 2: Activity (daily+hours) left, Sessions right
+    layout["row2"].split_row(
+        Layout(name="daily", ratio=1),
+        Layout(name="sessions", ratio=1),
+    )
+    layout["daily"].update(data["daily"])
+    layout["sessions"].update(data["sessions"])
+
+    # Row 3: Projects full width
+    layout["row3"].update(data["projects"])
+
+    return layout
+
+
+def _build_narrow(data: dict) -> Layout:
+    """Narrow layout (<80): single column, stacked."""
+    layout = Layout()
+    layout.split_column(
+        Layout(name="header", size=3),
+        Layout(name="stats", size=9),
+        Layout(name="tokens", ratio=1),
+        Layout(name="sessions", size=max(4, len(data["_sessions_raw"]) + 3)),
+        Layout(name="daily", ratio=2),
+        Layout(name="projects", ratio=1),
+    )
+    layout["header"].update(data["header"])
+    layout["stats"].update(data["stats"])
+    layout["tokens"].update(data["tokens"])
+    layout["sessions"].update(data["sessions"])
+    layout["daily"].update(data["daily"])
+    layout["projects"].update(data["projects"])
+
+    return layout
+
+
+# ── Main Dashboard ───────────────────────────────────────────────────────────
+
+
+def _build_dashboard(console: Console) -> Layout:
+    """Build the dashboard, adapting layout to terminal width."""
+    now = datetime.now()
+    width = console.width
+    compact = width < 100
+
+    # Load data
+    sessions = get_active_sessions()
+    conversations = load_all_conversations()
+    model_totals = get_model_totals(conversations)
+    daily = get_daily_usage(conversations, days=14)
+    hourly = get_hourly_activity(conversations, days=7)
+    project_stats = get_project_stats(conversations)
+
+    # Calculate costs
+    total_cost = 0.0
+    for model_id, tokens in model_totals.items():
+        if sum(tokens.values()) == 0:
+            continue
+        total_cost += calculate_cost_raw(
+            model_id,
+            tokens["input_tokens"], tokens["output_tokens"],
+            tokens["cache_read_tokens"], tokens["cache_create_tokens"],
+        )
+
+    today_str = now.strftime("%Y-%m-%d")
+    today_data = next((d for d in daily if d["date"] == today_str), None)
+    today_msgs = today_data["messages"] if today_data else 0
+    today_cost = 0.0
+    if today_data:
+        models = today_data.get("models", set())
+        model = next(iter(models)) if models else "claude-sonnet-4-6"
+        today_cost = calculate_cost_raw(
+            model, today_data["input_tokens"], today_data["output_tokens"],
+            today_data["cache_read_tokens"], today_data["cache_create_tokens"],
+        )
+
+    # Build panels with appropriate compactness
+    data = {
+        "header": _build_header(sessions, now, total_cost, today_msgs, width),
+        "sessions": _build_sessions_panel(sessions, now, compact=compact),
+        "stats": _build_stats_panel(conversations, total_cost, today_cost, compact=compact),
+        "tokens": _build_tokens_panel(model_totals, compact=compact),
+        "daily": _build_daily_chart(daily, hourly, width),
+        "projects": _build_projects_panel(project_stats, compact=compact),
+        "_sessions_raw": sessions,
+    }
+
+    if width >= 120:
+        return _build_wide(data)
+    elif width >= 80:
+        return _build_medium(data)
+    else:
+        return _build_narrow(data)
 
 
 def render_realtime(console: Console, refresh: float = 5.0):
-    """Render the live-updating realtime dashboard."""
+    """Render the live-updating TUI dashboard."""
     try:
         with Live(
-            _build_display(console),
+            _build_dashboard(console),
             console=console,
             refresh_per_second=1,
-            screen=False,
+            screen=True,
         ) as live:
             while True:
                 time.sleep(refresh)
-                live.update(_build_display(console))
+                live.update(_build_dashboard(console))
     except KeyboardInterrupt:
-        console.print("\n[dim]Stopped.[/dim]")
+        pass

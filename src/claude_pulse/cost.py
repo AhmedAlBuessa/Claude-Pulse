@@ -5,13 +5,30 @@ from claude_pulse.models import ModelUsage
 
 
 def calculate_cost(usage: ModelUsage) -> float:
-    """Calculate USD cost from token counts."""
-    pricing = get_pricing(usage.model)
+    """Calculate USD cost from a ModelUsage object."""
+    return calculate_cost_raw(
+        usage.model,
+        usage.input_tokens,
+        usage.output_tokens,
+        usage.cache_read_tokens,
+        usage.cache_create_tokens,
+    )
+
+
+def calculate_cost_raw(
+    model: str,
+    input_tokens: int,
+    output_tokens: int,
+    cache_read_tokens: int,
+    cache_create_tokens: int,
+) -> float:
+    """Calculate USD cost from raw token counts."""
+    pricing = get_pricing(model)
     cost = (
-        usage.input_tokens * pricing["input"]
-        + usage.output_tokens * pricing["output"]
-        + usage.cache_read_tokens * pricing["cache_read"]
-        + usage.cache_create_tokens * pricing["cache_create"]
+        input_tokens * pricing["input"]
+        + output_tokens * pricing["output"]
+        + cache_read_tokens * pricing["cache_read"]
+        + cache_create_tokens * pricing["cache_create"]
     ) / 1_000_000
     return cost
 

@@ -70,17 +70,33 @@ def main(view, days, theme, refresh, project, as_json):
 
 def _output_json(days: int, project: str = None):
     """Output usage data as JSON."""
-    from claude_pulse.cost import calculate_cost
-    from claude_pulse.data.history import get_daily_counts, load_history
+    from claude_pulse.cost import calculate_cost_raw
+    from claude_pulse.data.conversations import (
+        get_daily_usage,
+        get_model_totals,
+        load_all_conversations,
+    )
     from claude_pulse.data.sessions import get_active_sessions
-    from claude_pulse.data.stats import load_stats
 
-    stats = load_stats()
+    conversations = load_all_conversations()
     sessions = get_active_sessions()
-    daily = get_daily_counts(days=days)
+    daily = get_daily_usage(conversations, days=days)
+    model_totals = get_model_totals(conversations)
+
+    daily_merged = []
+    for d in daily:
+        daily_merged.append({
+            "date": d["date"],
+            "messages": d["messages"],
+            "sessions": d["sessions"],
+            "input_tokens": d["input_tokens"],
+            "output_tokens": d["output_tokens"],
+            "cache_read_tokens": d["cache_read_tokens"],
+            "cache_create_tokens": d["cache_create_tokens"],
+        })
 
     output = {
-        "daily": daily,
+        "daily": daily_merged,
         "active_sessions": [
             {
                 "pid": s.pid,
@@ -92,20 +108,26 @@ def _output_json(days: int, project: str = None):
         ],
         "model_usage": {},
         "totals": {
-            "messages": stats.total_messages if stats else 0,
-            "sessions": stats.total_sessions if stats else 0,
+            "conversations": len(conversations),
+            "messages": sum(c.messages for c in conversations),
+            "tool_calls": sum(c.tool_calls for c in conversations),
         },
     }
 
-    if stats:
-        for model_id, usage in stats.model_usage.items():
-            output["model_usage"][model_id] = {
-                "input_tokens": usage.input_tokens,
-                "output_tokens": usage.output_tokens,
-                "cache_read_tokens": usage.cache_read_tokens,
-                "cache_create_tokens": usage.cache_create_tokens,
-                "estimated_cost_usd": round(calculate_cost(usage), 4),
-            }
+    for model_id, tokens in model_totals.items():
+        output["model_usage"][model_id] = {
+            "input_tokens": tokens["input_tokens"],
+            "output_tokens": tokens["output_tokens"],
+            "cache_read_tokens": tokens["cache_read_tokens"],
+            "cache_create_tokens": tokens["cache_create_tokens"],
+            "estimated_cost_usd": round(calculate_cost_raw(
+                model_id,
+                tokens["input_tokens"],
+                tokens["output_tokens"],
+                tokens["cache_read_tokens"],
+                tokens["cache_create_tokens"],
+            ), 4),
+        }
 
     json.dump(output, sys.stdout, indent=2)
     print()
