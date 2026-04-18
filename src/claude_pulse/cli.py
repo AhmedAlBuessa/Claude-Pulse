@@ -8,7 +8,7 @@ from rich.console import Console
 from rich.theme import Theme
 
 from claude_pulse import __version__
-from claude_pulse.config import DEFAULT_DAYS, DEFAULT_REFRESH
+from claude_pulse.config import DEFAULT_DAYS, DEFAULT_PLAN, DEFAULT_REFRESH, load_saved_limit, save_calibrated_limit
 
 DARK_THEME = Theme({
     "info": "cyan",
@@ -47,11 +47,44 @@ def _get_console(theme: str) -> Console:
 )
 @click.option("-r", "--refresh", type=float, default=DEFAULT_REFRESH, help="Refresh interval in seconds.")
 @click.option("-p", "--project", type=str, default=None, help="Filter by project path.")
+@click.option(
+    "--plan",
+    type=click.Choice(["pro", "max5", "max20"], case_sensitive=False),
+    default=DEFAULT_PLAN,
+    help="Subscription plan for limit tracking.",
+)
+@click.option("--limit", type=int, default=None, help="Custom token limit (overrides plan).")
+@click.option("--calibrate", type=int, default=None, help="Calibrate: pass the %% from the website (e.g. --calibrate 38).")
 @click.option("--json-output", "as_json", is_flag=True, help="Output as JSON.")
 @click.version_option(version=__version__, prog_name="claude-pulse")
-def main(view, days, theme, refresh, project, as_json):
+def main(view, days, theme, refresh, project, plan, limit, calibrate, as_json):
     """Monitor your Claude Code usage."""
     console = _get_console(theme)
+
+    # Calibrate mode: calculate limit from website percentage
+    if calibrate is not None:
+        from claude_pulse.data.conversations import load_all_conversations, get_rolling_window_usage
+        from claude_pulse.config import PLAN_LIMITS
+        convs = load_all_conversations()
+        plan_info = PLAN_LIMITS.get(plan, PLAN_LIMITS["max5"])
+        wu = get_rolling_window_usage(convs, window_hours=plan_info["window_hours"])
+        used = wu["output_tokens"]
+        if calibrate <= 0 or calibrate >= 100:
+            console.print("[red]Percentage must be between 1 and 99.[/red]")
+            return
+        if used == 0:
+            console.print("[red]No usage in current window — use Claude Code first, then calibrate.[/red]")
+            return
+        real_limit = int(used / (calibrate / 100))
+        save_calibrated_limit(real_limit)
+        from claude_pulse.cost import format_tokens
+        console.print(f"\n  Calibrated! {format_tokens(used)} tokens = {calibrate}% → limit = [bold]{format_tokens(real_limit)}[/bold]")
+        console.print(f"  Saved to ~/.claude-pulse/config.json\n")
+        return
+
+    # Use saved calibrated limit if no --limit given
+    if limit is None:
+        limit = load_saved_limit()
 
     if as_json:
         _output_json(days, project)
@@ -65,7 +98,7 @@ def main(view, days, theme, refresh, project, as_json):
         render_monthly(console)
     else:
         from claude_pulse.views.realtime import render_realtime
-        render_realtime(console, refresh=refresh)
+        render_realtime(console, refresh=refresh, plan=plan, custom_limit=limit)
 
 
 def _output_json(days: int, project: str = None):

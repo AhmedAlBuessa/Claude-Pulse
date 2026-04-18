@@ -1,8 +1,11 @@
 """Paths, pricing constants, and defaults."""
 
+import json
 from pathlib import Path
 
 CLAUDE_DIR = Path.home() / ".claude"
+PULSE_CONFIG_DIR = Path.home() / ".claude-pulse"
+PULSE_CONFIG_FILE = PULSE_CONFIG_DIR / "config.json"
 STATS_CACHE_PATH = CLAUDE_DIR / "stats-cache.json"
 HISTORY_PATH = CLAUDE_DIR / "history.jsonl"
 SESSIONS_DIR = CLAUDE_DIR / "sessions"
@@ -53,9 +56,19 @@ MODEL_DISPLAY_NAMES = {
     "claude-haiku-4-5": "Haiku 4.5",
 }
 
+# Plan limits (output tokens per 5-hour rolling window)
+# Anthropic doesn't publish exact limits and likely uses an internal
+# weighted formula. These are rough estimates. Use --limit to override.
+PLAN_LIMITS = {
+    "pro": {"name": "Pro", "output_tokens": 400_000, "window_hours": 5},
+    "max5": {"name": "Max 5x", "output_tokens": 2_000_000, "window_hours": 5},
+    "max20": {"name": "Max 20x", "output_tokens": 8_000_000, "window_hours": 5},
+}
+
 # CLI defaults
-DEFAULT_REFRESH = 5
+DEFAULT_REFRESH = 0.5
 DEFAULT_DAYS = 7
+DEFAULT_PLAN = "max5"
 
 
 def short_model_name(model_id: str) -> str:
@@ -78,3 +91,27 @@ def get_pricing(model_id: str) -> dict:
         if model_id.startswith(key):
             return pricing
     return DEFAULT_PRICING
+
+
+def load_saved_limit() -> int | None:
+    """Load calibrated limit from saved config."""
+    if not PULSE_CONFIG_FILE.exists():
+        return None
+    try:
+        data = json.loads(PULSE_CONFIG_FILE.read_text())
+        return data.get("calibrated_limit")
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def save_calibrated_limit(limit: int):
+    """Save calibrated limit to config."""
+    PULSE_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    data = {}
+    if PULSE_CONFIG_FILE.exists():
+        try:
+            data = json.loads(PULSE_CONFIG_FILE.read_text())
+        except (json.JSONDecodeError, OSError):
+            pass
+    data["calibrated_limit"] = limit
+    PULSE_CONFIG_FILE.write_text(json.dumps(data, indent=2))

@@ -32,8 +32,8 @@ dependencies = [
 dev = ["pytest>=7.0"]
 
 [project.scripts]
+acp = "claude_pulse.cli:main"
 claude-pulse = "claude_pulse.cli:main"
-cpulse = "claude_pulse.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/ahmedalbuessa/claude-pulse"

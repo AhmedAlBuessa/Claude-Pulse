@@ -135,21 +135,45 @@ def _parse_conversation(path: str, project_dir: str) -> Optional[ConversationSta
     return stats
 
 
+# File-level cache: path -> (mtime, ConversationStats)
+_conv_cache: dict[str, tuple[float, ConversationStats]] = {}
+
+
 def load_all_conversations() -> list[ConversationStats]:
-    """Load all conversation files from all projects."""
+    """Load all conversation files, using cache for unchanged files."""
     if not PROJECTS_DIR.exists():
         return []
 
     conversations = []
+    seen_paths = set()
+
     for project_dir in PROJECTS_DIR.iterdir():
         if not project_dir.is_dir():
             continue
         for jsonl_file in project_dir.glob("*.jsonl"):
-            conv = _parse_conversation(str(jsonl_file), str(project_dir))
+            path_str = str(jsonl_file)
+            seen_paths.add(path_str)
+
+            try:
+                mtime = jsonl_file.stat().st_mtime
+            except OSError:
+                continue
+
+            # Use cache if file hasn't changed
+            cached = _conv_cache.get(path_str)
+            if cached and cached[0] == mtime:
+                conversations.append(cached[1])
+                continue
+
+            conv = _parse_conversation(path_str, str(project_dir))
             if conv:
+                _conv_cache[path_str] = (mtime, conv)
                 conversations.append(conv)
 
-    # Sort by most recent first
+    # Clean stale cache entries
+    for stale in set(_conv_cache.keys()) - seen_paths:
+        del _conv_cache[stale]
+
     conversations.sort(key=lambda c: c.last_timestamp, reverse=True)
     return conversations
 
@@ -191,7 +215,8 @@ def _count_user_messages_by_day(conv: ConversationStats, daily: dict, cutoff_str
 
 def get_daily_usage(conversations: list[ConversationStats], days: int = 7) -> list[dict]:
     """Aggregate all usage by day from conversation data (tokens, messages, sessions)."""
-    cutoff = datetime.now() - timedelta(days=days)
+    from datetime import timezone
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
     cutoff_str = cutoff.strftime("%Y-%m-%d")
 
     daily: dict[str, dict] = defaultdict(lambda: {
@@ -315,7 +340,8 @@ def get_project_stats(conversations: list[ConversationStats]) -> list[dict]:
 
 def get_hourly_activity(conversations: list[ConversationStats], days: int = 7) -> list[int]:
     """Get message counts per hour of day (0-23) for the last N days."""
-    cutoff = datetime.now() - timedelta(days=days)
+    from datetime import timezone
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
     cutoff_str = cutoff.strftime("%Y-%m-%dT")
 
     hours = [0] * 24
@@ -329,3 +355,49 @@ def get_hourly_activity(conversations: list[ConversationStats], days: int = 7) -
             except (ValueError, IndexError):
                 pass
     return hours
+
+
+def get_rolling_window_usage(conversations: list[ConversationStats], window_hours: int = 5) -> dict:
+    """Get token usage within the rolling window (last N hours)."""
+    from datetime import timezone
+    now_utc = datetime.now(timezone.utc)
+    cutoff = now_utc - timedelta(hours=window_hours)
+    cutoff_iso = cutoff.strftime("%Y-%m-%dT%H:%M:%S")
+
+    totals = {
+        "output_tokens": 0,
+        "input_tokens": 0,
+        "cache_read_tokens": 0,
+        "cache_create_tokens": 0,
+        "messages": 0,
+        "window_hours": window_hours,
+        "oldest_in_window": "",
+        "newest_in_window": "",
+        "elapsed_minutes": 0,
+    }
+
+    for conv in conversations:
+        for usage in conv.usage:
+            if not usage.timestamp or usage.timestamp < cutoff_iso:
+                continue
+            totals["output_tokens"] += usage.output_tokens
+            totals["input_tokens"] += usage.input_tokens
+            totals["cache_read_tokens"] += usage.cache_read_tokens
+            totals["cache_create_tokens"] += usage.cache_create_tokens
+            totals["messages"] += 1
+
+            if not totals["oldest_in_window"] or usage.timestamp < totals["oldest_in_window"]:
+                totals["oldest_in_window"] = usage.timestamp
+            if not totals["newest_in_window"] or usage.timestamp > totals["newest_in_window"]:
+                totals["newest_in_window"] = usage.timestamp
+
+    # Calculate elapsed minutes since first message in window
+    if totals["oldest_in_window"]:
+        try:
+            oldest = datetime.fromisoformat(totals["oldest_in_window"].replace("Z", "+00:00"))
+            newest = datetime.fromisoformat(totals["newest_in_window"].replace("Z", "+00:00"))
+            totals["elapsed_minutes"] = max(1, int((newest - oldest).total_seconds() / 60))
+        except (ValueError, TypeError):
+            totals["elapsed_minutes"] = 1
+
+    return totals

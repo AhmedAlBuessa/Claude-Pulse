@@ -10,13 +10,14 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from claude_pulse.config import short_model_name
+from claude_pulse.config import PLAN_LIMITS, short_model_name
 from claude_pulse.cost import calculate_cost_raw, format_cost, format_tokens
 from claude_pulse.data.conversations import (
     get_daily_usage,
     get_hourly_activity,
     get_model_totals,
     get_project_stats,
+    get_rolling_window_usage,
     load_all_conversations,
 )
 from claude_pulse.data.sessions import get_active_sessions
@@ -319,11 +320,133 @@ def _build_stats_panel(conversations: list, total_cost: float, today_cost: float
     return Panel(text, title="[bold] Stats [/bold]", border_style="cyan", padding=(0, 0))
 
 
+def _build_plan_panel(window_usage: dict, plan: str, conversations: list,
+                      total_cost: float, today_cost: float,
+                      limit_override: int = None, compact: bool = False) -> Panel:
+    """Build the plan limits + burn rate + key stats panel."""
+    plan_info = PLAN_LIMITS.get(plan, PLAN_LIMITS["max5"])
+    plan_name = plan_info["name"]
+    limit = limit_override if limit_override else plan_info["output_tokens"]
+    window_h = plan_info["window_hours"]
+    used = window_usage["output_tokens"]
+    pct = min(used / limit * 100, 100) if limit > 0 else 0
+    remaining = max(limit - used, 0)
+
+    # Burn rate
+    elapsed_min = window_usage["elapsed_minutes"]
+    msgs_in_window = window_usage["messages"]
+    if elapsed_min > 0 and msgs_in_window > 0:
+        tokens_per_min = used / elapsed_min
+        tokens_per_hour = tokens_per_min * 60
+        if tokens_per_min > 0 and remaining > 0:
+            mins_left = remaining / tokens_per_min
+            hours_left = int(mins_left // 60)
+            mins_rem = int(mins_left % 60)
+            eta_str = f"{hours_left}h {mins_rem}m" if hours_left > 0 else f"{mins_rem}m"
+        else:
+            eta_str = "limit reached" if remaining == 0 else "∞"
+    else:
+        tokens_per_hour = 0
+        eta_str = "∞"
+
+    # Color
+    if pct >= 90:
+        bar_color, pct_color, status = "bold red", "bold red", "CRITICAL"
+    elif pct >= 75:
+        bar_color, pct_color, status = "yellow", "bold yellow", "HIGH"
+    elif pct >= 50:
+        bar_color, pct_color, status = "cyan", "bold cyan", "MODERATE"
+    else:
+        bar_color, pct_color, status = "green", "bold green", "OK"
+
+    # Stats
+    total_user = sum(c.user_messages for c in conversations)
+    total_tools = sum(c.tool_calls for c in conversations)
+
+    text = Text()
+
+    if compact:
+        bar_w = 20
+        filled = int(pct / 100 * bar_w)
+        empty = bar_w - filled
+        text.append(f" {plan_name} ", style="bold")
+        if limit > 0:
+            text.append(f"{pct:.0f}%\n", style=pct_color)
+        else:
+            text.append(f"{format_tokens(used)}\n", style="bold")
+        text.append(" ", style="dim")
+        text.append("█" * filled, style=bar_color)
+        text.append("░" * empty, style="dim")
+        text.append(f"\n")
+        text.append(f" Burn ", style="dim")
+        if tokens_per_hour > 0:
+            text.append(f"{format_tokens(int(tokens_per_hour))}/hr", style="bold")
+        else:
+            text.append(f"idle", style="dim")
+        text.append(f"\n")
+        text.append(f" ─────────────\n", style="dim")
+        text.append(f" Today ", style="dim")
+        text.append(f"{_compact_cost(today_cost):>6}\n", style="bold red")
+        text.append(f" Total ", style="dim")
+        text.append(f"{_compact_cost(total_cost):>6}\n", style="bold red")
+    else:
+        bar_w = 30
+        filled = int(pct / 100 * bar_w)
+        empty = bar_w - filled
+
+        # Window usage
+        text.append(f"  {plan_name}", style="bold")
+        text.append(f"  {window_h}h window  ", style="dim")
+        if limit > 0 and pct > 0:
+            text.append(f"[{status}]\n", style=pct_color)
+        else:
+            text.append(f"\n")
+
+        text.append("  ", style="dim")
+        text.append("█" * filled, style=bar_color)
+        text.append("░" * empty, style="dim")
+        if limit > 0:
+            text.append(f" {pct:.1f}%\n", style=pct_color)
+        else:
+            text.append(f" {format_tokens(used)}\n", style="bold")
+
+        text.append(f"  {format_tokens(used)}", style="bold")
+        text.append(f" / {format_tokens(limit)}", style="dim")
+        text.append(f"   rem: ", style="dim")
+        text.append(f"{format_tokens(remaining)}\n", style="bold")
+
+        # Burn rate
+        text.append(f"  Burn: ", style="dim")
+        if tokens_per_hour > 0:
+            text.append(f"{format_tokens(int(tokens_per_hour))}/hr", style="bold")
+        else:
+            text.append(f"idle", style="dim")
+        text.append(f"   ETA: ", style="dim")
+        text.append(f"{eta_str}\n", style=pct_color)
+
+        text.append(f"  ─────────────────────────────\n", style="dim")
+
+        # Key stats inline
+        text.append(f"  Convos ", style="dim")
+        text.append(f"{len(conversations):>5,}", style="bold")
+        text.append(f"   Prompts ", style="dim")
+        text.append(f"{total_user:>6,}\n", style="bold green")
+        text.append(f"  Tools  ", style="dim")
+        text.append(f"{total_tools:>5,}", style="bold yellow")
+        text.append(f"   Today   ", style="dim")
+        text.append(f"{format_cost(today_cost):>6}\n", style="bold red")
+        text.append(f"  Total  ", style="dim")
+        text.append(f"{format_cost(total_cost):>5}\n", style="bold red")
+
+    border_color = "red" if pct >= 90 else ("yellow" if pct >= 75 else ("cyan" if pct >= 50 else "green"))
+    return Panel(text, title=f"[bold] CC Usage & Stats [/bold]", border_style=border_color, padding=(0, 0))
+
+
 # ── Layout Builders ──────────────────────────────────────────────────────────
 
 
 def _build_wide(data: dict) -> Layout:
-    """Wide layout (120+): Stats+Tokens top, Activity+Sessions+Projects bottom."""
+    """Wide layout (120+): Plan+Stats+Tokens top, Activity+Sessions+Projects bottom."""
     layout = Layout()
     layout.split_column(
         Layout(name="header", size=3),
@@ -332,12 +455,12 @@ def _build_wide(data: dict) -> Layout:
     )
     layout["header"].update(data["header"])
 
-    # Upper: small Stats + big Tokens
+    # Upper: Plan+Stats combined + Tokens
     layout["upper"].split_row(
-        Layout(name="stats", ratio=1),
+        Layout(name="plan", ratio=2),
         Layout(name="tokens", ratio=3),
     )
-    layout["stats"].update(data["stats"])
+    layout["plan"].update(data["plan"])
     layout["tokens"].update(data["tokens"])
 
     # Lower: Activity (daily+hours) left, Sessions+Projects right
@@ -367,12 +490,12 @@ def _build_medium(data: dict) -> Layout:
     )
     layout["header"].update(data["header"])
 
-    # Row 1: small Stats + big Tokens
+    # Row 1: Plan+Stats left, Tokens right
     layout["row1"].split_row(
-        Layout(name="stats", ratio=1),
+        Layout(name="plan", ratio=1),
         Layout(name="tokens", ratio=2),
     )
-    layout["stats"].update(data["stats"])
+    layout["plan"].update(data["plan"])
     layout["tokens"].update(data["tokens"])
 
     # Row 2: Activity (daily+hours) left, Sessions right
@@ -394,14 +517,14 @@ def _build_narrow(data: dict) -> Layout:
     layout = Layout()
     layout.split_column(
         Layout(name="header", size=3),
-        Layout(name="stats", size=9),
+        Layout(name="plan", size=9),
         Layout(name="tokens", ratio=1),
         Layout(name="sessions", size=max(4, len(data["_sessions_raw"]) + 3)),
         Layout(name="daily", ratio=2),
         Layout(name="projects", ratio=1),
     )
     layout["header"].update(data["header"])
-    layout["stats"].update(data["stats"])
+    layout["plan"].update(data["plan"])
     layout["tokens"].update(data["tokens"])
     layout["sessions"].update(data["sessions"])
     layout["daily"].update(data["daily"])
@@ -413,19 +536,42 @@ def _build_narrow(data: dict) -> Layout:
 # ── Main Dashboard ───────────────────────────────────────────────────────────
 
 
-def _build_dashboard(console: Console) -> Layout:
+_slow_cache = {"ts": 0, "data": None}
+_SLOW_CACHE_TTL = 15  # seconds
+
+
+def _build_dashboard(console: Console, plan: str = "max5", custom_limit: int = None) -> Layout:
     """Build the dashboard, adapting layout to terminal width."""
     now = datetime.now()
     width = console.width
     compact = width < 100
 
-    # Load data
-    sessions = get_active_sessions()
+    # Load conversations (fast with file-level cache)
     conversations = load_all_conversations()
+    plan_info = PLAN_LIMITS.get(plan, PLAN_LIMITS["max5"])
+
+    # Apply custom limit override
+    if custom_limit:
+        plan_info = {**plan_info, "output_tokens": custom_limit, "name": f"{plan_info['name']}*"}
+
+    # Fast data (update every tick)
+    sessions = get_active_sessions()
+    window_usage = get_rolling_window_usage(conversations, window_hours=plan_info["window_hours"])
     model_totals = get_model_totals(conversations)
-    daily = get_daily_usage(conversations, days=14)
-    hourly = get_hourly_activity(conversations, days=7)
-    project_stats = get_project_stats(conversations)
+
+    # Slow data (cache for 15 seconds)
+    cache_age = time.time() - _slow_cache["ts"]
+    if _slow_cache["data"] is None or cache_age >= _SLOW_CACHE_TTL:
+        _slow_cache["data"] = {
+            "daily": get_daily_usage(conversations, days=14),
+            "hourly": get_hourly_activity(conversations, days=7),
+            "project_stats": get_project_stats(conversations),
+        }
+        _slow_cache["ts"] = time.time()
+
+    daily = _slow_cache["data"]["daily"]
+    hourly = _slow_cache["data"]["hourly"]
+    project_stats = _slow_cache["data"]["project_stats"]
 
     # Calculate costs
     total_cost = 0.0
@@ -453,8 +599,8 @@ def _build_dashboard(console: Console) -> Layout:
     # Build panels with appropriate compactness
     data = {
         "header": _build_header(sessions, now, total_cost, today_msgs, width),
+        "plan": _build_plan_panel(window_usage, plan, conversations, total_cost, today_cost, compact=compact),
         "sessions": _build_sessions_panel(sessions, now, compact=compact),
-        "stats": _build_stats_panel(conversations, total_cost, today_cost, compact=compact),
         "tokens": _build_tokens_panel(model_totals, compact=compact),
         "daily": _build_daily_chart(daily, hourly, width),
         "projects": _build_projects_panel(project_stats, compact=compact),
@@ -469,17 +615,17 @@ def _build_dashboard(console: Console) -> Layout:
         return _build_narrow(data)
 
 
-def render_realtime(console: Console, refresh: float = 5.0):
+def render_realtime(console: Console, refresh: float = 0.5, plan: str = "max5", custom_limit: int = None):
     """Render the live-updating TUI dashboard."""
     try:
         with Live(
-            _build_dashboard(console),
+            _build_dashboard(console, plan=plan, custom_limit=custom_limit),
             console=console,
-            refresh_per_second=1,
+            refresh_per_second=4,
             screen=True,
         ) as live:
             while True:
                 time.sleep(refresh)
-                live.update(_build_dashboard(console))
+                live.update(_build_dashboard(console, plan=plan, custom_limit=custom_limit))
     except KeyboardInterrupt:
         pass
