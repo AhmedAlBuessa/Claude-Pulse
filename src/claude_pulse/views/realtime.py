@@ -321,12 +321,11 @@ def _build_stats_panel(conversations: list, total_cost: float, today_cost: float
 
 
 def _build_plan_panel(window_usage: dict, plan: str, conversations: list,
-                      total_cost: float, today_cost: float,
-                      limit_override: int = None, compact: bool = False) -> Panel:
-    """Build the plan limits + burn rate + key stats panel."""
+                      total_cost: float, today_cost: float, compact: bool = False) -> Panel:
+    """Build the usage + burn rate + stats panel."""
     plan_info = PLAN_LIMITS.get(plan, PLAN_LIMITS["max5"])
     plan_name = plan_info["name"]
-    limit = limit_override if limit_override else plan_info["output_tokens"]
+    limit = plan_info["output_tokens"]
     window_h = plan_info["window_hours"]
     used = window_usage["output_tokens"]
     pct = min(used / limit * 100, 100) if limit > 0 else 0
@@ -344,20 +343,20 @@ def _build_plan_panel(window_usage: dict, plan: str, conversations: list,
             mins_rem = int(mins_left % 60)
             eta_str = f"{hours_left}h {mins_rem}m" if hours_left > 0 else f"{mins_rem}m"
         else:
-            eta_str = "limit reached" if remaining == 0 else "∞"
+            eta_str = "at limit" if remaining == 0 else "∞"
     else:
         tokens_per_hour = 0
-        eta_str = "∞"
+        eta_str = "idle"
 
-    # Color
+    # Color based on percentage
     if pct >= 90:
-        bar_color, pct_color, status = "bold red", "bold red", "CRITICAL"
-    elif pct >= 75:
-        bar_color, pct_color, status = "yellow", "bold yellow", "HIGH"
-    elif pct >= 50:
-        bar_color, pct_color, status = "cyan", "bold cyan", "MODERATE"
+        bar_color, pct_color = "bold red", "bold red"
+    elif pct >= 70:
+        bar_color, pct_color = "yellow", "bold yellow"
+    elif pct >= 40:
+        bar_color, pct_color = "cyan", "bold cyan"
     else:
-        bar_color, pct_color, status = "green", "bold green", "OK"
+        bar_color, pct_color = "green", "bold green"
 
     # Stats
     total_user = sum(c.user_messages for c in conversations)
@@ -370,20 +369,16 @@ def _build_plan_panel(window_usage: dict, plan: str, conversations: list,
         filled = int(pct / 100 * bar_w)
         empty = bar_w - filled
         text.append(f" {plan_name} ", style="bold")
-        if limit > 0:
-            text.append(f"{pct:.0f}%\n", style=pct_color)
-        else:
-            text.append(f"{format_tokens(used)}\n", style="bold")
+        text.append(f"~{pct:.0f}%\n", style=pct_color)
         text.append(" ", style="dim")
         text.append("█" * filled, style=bar_color)
         text.append("░" * empty, style="dim")
         text.append(f"\n")
         text.append(f" Burn ", style="dim")
         if tokens_per_hour > 0:
-            text.append(f"{format_tokens(int(tokens_per_hour))}/hr", style="bold")
+            text.append(f"{format_tokens(int(tokens_per_hour))}/hr\n", style="bold")
         else:
-            text.append(f"idle", style="dim")
-        text.append(f"\n")
+            text.append(f"idle\n", style="dim")
         text.append(f" ─────────────\n", style="dim")
         text.append(f" Today ", style="dim")
         text.append(f"{_compact_cost(today_cost):>6}\n", style="bold red")
@@ -394,26 +389,21 @@ def _build_plan_panel(window_usage: dict, plan: str, conversations: list,
         filled = int(pct / 100 * bar_w)
         empty = bar_w - filled
 
-        # Window usage
+        # Header
         text.append(f"  {plan_name}", style="bold")
-        text.append(f"  {window_h}h window  ", style="dim")
-        if limit > 0 and pct > 0:
-            text.append(f"[{status}]\n", style=pct_color)
-        else:
-            text.append(f"\n")
+        text.append(f"  {window_h}h window\n", style="dim")
 
+        # Progress bar
         text.append("  ", style="dim")
         text.append("█" * filled, style=bar_color)
         text.append("░" * empty, style="dim")
-        if limit > 0:
-            text.append(f" {pct:.1f}%\n", style=pct_color)
-        else:
-            text.append(f" {format_tokens(used)}\n", style="bold")
+        text.append(f" ~{pct:.0f}%\n", style=pct_color)
 
+        # Usage line
         text.append(f"  {format_tokens(used)}", style="bold")
-        text.append(f" / {format_tokens(limit)}", style="dim")
-        text.append(f"   rem: ", style="dim")
-        text.append(f"{format_tokens(remaining)}\n", style="bold")
+        text.append(f" / ~{format_tokens(limit)}", style="dim")
+        text.append(f"   ETA: ", style="dim")
+        text.append(f"{eta_str}\n", style=pct_color)
 
         # Burn rate
         text.append(f"  Burn: ", style="dim")
@@ -421,12 +411,12 @@ def _build_plan_panel(window_usage: dict, plan: str, conversations: list,
             text.append(f"{format_tokens(int(tokens_per_hour))}/hr", style="bold")
         else:
             text.append(f"idle", style="dim")
-        text.append(f"   ETA: ", style="dim")
-        text.append(f"{eta_str}\n", style=pct_color)
+        text.append(f"   Msgs: ", style="dim")
+        text.append(f"{msgs_in_window}\n", style="bold")
 
         text.append(f"  ─────────────────────────────\n", style="dim")
 
-        # Key stats inline
+        # Key stats
         text.append(f"  Convos ", style="dim")
         text.append(f"{len(conversations):>5,}", style="bold")
         text.append(f"   Prompts ", style="dim")
@@ -438,8 +428,8 @@ def _build_plan_panel(window_usage: dict, plan: str, conversations: list,
         text.append(f"  Total  ", style="dim")
         text.append(f"{format_cost(total_cost):>5}\n", style="bold red")
 
-    border_color = "red" if pct >= 90 else ("yellow" if pct >= 75 else ("cyan" if pct >= 50 else "green"))
-    return Panel(text, title=f"[bold] CC Usage & Stats [/bold]", border_style=border_color, padding=(0, 0))
+    border_color = "red" if pct >= 90 else ("yellow" if pct >= 70 else ("cyan" if pct >= 40 else "green"))
+    return Panel(text, title=f"[bold] Usage & Stats [/bold]", border_style=border_color, padding=(0, 0))
 
 
 # ── Layout Builders ──────────────────────────────────────────────────────────
@@ -540,7 +530,7 @@ _slow_cache = {"ts": 0, "data": None}
 _SLOW_CACHE_TTL = 15  # seconds
 
 
-def _build_dashboard(console: Console, plan: str = "max5", custom_limit: int = None) -> Layout:
+def _build_dashboard(console: Console, plan: str = "max5") -> Layout:
     """Build the dashboard, adapting layout to terminal width."""
     now = datetime.now()
     width = console.width
@@ -549,10 +539,6 @@ def _build_dashboard(console: Console, plan: str = "max5", custom_limit: int = N
     # Load conversations (fast with file-level cache)
     conversations = load_all_conversations()
     plan_info = PLAN_LIMITS.get(plan, PLAN_LIMITS["max5"])
-
-    # Apply custom limit override
-    if custom_limit:
-        plan_info = {**plan_info, "output_tokens": custom_limit, "name": f"{plan_info['name']}*"}
 
     # Fast data (update every tick)
     sessions = get_active_sessions()
@@ -615,17 +601,17 @@ def _build_dashboard(console: Console, plan: str = "max5", custom_limit: int = N
         return _build_narrow(data)
 
 
-def render_realtime(console: Console, refresh: float = 0.5, plan: str = "max5", custom_limit: int = None):
+def render_realtime(console: Console, refresh: float = 0.5, plan: str = "max5"):
     """Render the live-updating TUI dashboard."""
     try:
         with Live(
-            _build_dashboard(console, plan=plan, custom_limit=custom_limit),
+            _build_dashboard(console, plan=plan),
             console=console,
             refresh_per_second=4,
             screen=True,
         ) as live:
             while True:
                 time.sleep(refresh)
-                live.update(_build_dashboard(console, plan=plan, custom_limit=custom_limit))
+                live.update(_build_dashboard(console, plan=plan))
     except KeyboardInterrupt:
         pass

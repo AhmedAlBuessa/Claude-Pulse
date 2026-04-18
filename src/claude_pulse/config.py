@@ -57,12 +57,12 @@ MODEL_DISPLAY_NAMES = {
 }
 
 # Plan limits (output tokens per 5-hour rolling window)
-# Anthropic doesn't publish exact limits and likely uses an internal
-# weighted formula. These are rough estimates. Use --limit to override.
+# These are estimates calibrated from website data. They intentionally
+# lean slightly low so the tool warns you before the website would.
 PLAN_LIMITS = {
-    "pro": {"name": "Pro", "output_tokens": 400_000, "window_hours": 5},
-    "max5": {"name": "Max 5x", "output_tokens": 2_000_000, "window_hours": 5},
-    "max20": {"name": "Max 20x", "output_tokens": 8_000_000, "window_hours": 5},
+    "pro": {"name": "Pro", "output_tokens": 25_000, "window_hours": 5},
+    "max5": {"name": "Max 5x", "output_tokens": 125_000, "window_hours": 5},
+    "max20": {"name": "Max 20x", "output_tokens": 500_000, "window_hours": 5},
 }
 
 # CLI defaults
