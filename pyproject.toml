@@ -36,9 +36,9 @@ acp = "claude_pulse.cli:main"
 claude-pulse = "claude_pulse.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/ahmedalbuessa/claude-pulse"
-Repository = "https://github.com/ahmedalbuessa/claude-pulse"
-Issues = "https://github.com/ahmedalbuessa/claude-pulse/issues"
+Homepage = "https://github.com/AhmedAlBuessa/Claude-Pulse"
+Repository = "https://github.com/AhmedAlBuessa/Claude-Pulse"
+Issues = "https://github.com/AhmedAlBuessa/Claude-Pulse/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/claude_pulse"]

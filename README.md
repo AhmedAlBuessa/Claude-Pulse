@@ -50,7 +50,7 @@ uv tool install claude-pulse
 pip install claude-pulse
 ```
 
-> 💡 Two CLI aliases are installed: **`claude-pulse`** and the shorter **`acp`**.
+> 💡 Two CLI aliases are installed: **`acp`** (recommended) and **`claude-pulse`**.
 
 ---
 
@@ -59,31 +59,31 @@ pip install claude-pulse
 ### Real-time dashboard _(default)_
 
 ```bash
-claude-pulse
+acp
 ```
 
 ### Daily usage table
 
 ```bash
-claude-pulse -v daily -d 14
+acp -v daily -d 14
 ```
 
 ### Monthly summary
 
 ```bash
-claude-pulse -v monthly
+acp -v monthly
 ```
 
 ### JSON export
 
 ```bash
-claude-pulse --json-output > usage.json
+acp --json-output > usage.json
 ```
 
 ### Plan-aware tracking
 
 ```bash
-claude-pulse --plan max20
+acp --plan max20
 ```
 
 ---
@@ -124,8 +124,8 @@ Claude Pulse reads your local Claude Code conversation logs, aggregates tokens a
 ## 🛠️ Development
 
 ```bash
-git clone https://github.com/ahmedalbuessa/claude-pulse
-cd claude-pulse
+git clone https://github.com/AhmedAlBuessa/Claude-Pulse
+cd Claude-Pulse
 uv sync --extra dev
 uv run pytest
 ```
@@ -134,7 +134,7 @@ uv run pytest
 
 ## 🤝 Contributing
 
-Contributions, bug reports, and feature ideas are all welcome! Open an [issue](https://github.com/ahmedalbuessa/claude-pulse/issues) or send a PR.
+Contributions, bug reports, and feature ideas are all welcome! Open an [issue](https://github.com/AhmedAlBuessa/Claude-Pulse/issues) or send a PR.
 
 ---
 
