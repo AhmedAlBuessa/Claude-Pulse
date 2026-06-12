@@ -34,11 +34,12 @@ def _get_console(theme: str) -> Console:
 @click.command()
 @click.option(
     "-v", "--view",
-    type=click.Choice(["realtime", "daily", "monthly"], case_sensitive=False),
+    type=click.Choice(["realtime", "daily", "monthly", "sessions"], case_sensitive=False),
     default="realtime",
     help="Display mode.",
 )
-@click.option("-d", "--days", type=int, default=DEFAULT_DAYS, help="Days to show (daily view).")
+@click.option("-d", "--days", type=int, default=DEFAULT_DAYS, help="Days to show (daily/sessions view).")
+@click.option("--list-only", is_flag=True, help="Sessions view: list without prompting to resume.")
 @click.option(
     "-t", "--theme",
     type=click.Choice(["light", "dark", "auto"], case_sensitive=False),
@@ -55,7 +56,7 @@ def _get_console(theme: str) -> Console:
 )
 @click.option("--json-output", "as_json", is_flag=True, help="Output as JSON.")
 @click.version_option(version=__version__, prog_name="claude-pulse")
-def main(view, days, theme, refresh, project, plan, as_json):
+def main(view, days, list_only, theme, refresh, project, plan, as_json):
     """Monitor your Claude Code usage."""
     console = _get_console(theme)
 
@@ -69,6 +70,11 @@ def main(view, days, theme, refresh, project, plan, as_json):
     elif view == "monthly":
         from claude_pulse.views.monthly import render_monthly
         render_monthly(console)
+    elif view == "sessions":
+        from claude_pulse.views.sessions import render_sessions
+        # Default to a one-month window for browsing unless overridden.
+        window = days if days != DEFAULT_DAYS else 30
+        render_sessions(console, days=window, project=project, list_only=list_only)
     else:
         from claude_pulse.views.realtime import render_realtime
         render_realtime(console, refresh=refresh, plan=plan)

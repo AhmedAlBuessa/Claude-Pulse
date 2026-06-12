@@ -32,6 +32,7 @@
 | 🎯 **Plan Limits** | Pro, Max 5, and Max 20 subscription calibration |
 | 🎨 **Themes** | Light, dark, or auto — matches your terminal |
 | 📁 **Project Filters** | Slice usage by working directory |
+| 🕘 **Session Resume** | Browse past sessions and jump back into one |
 | 🧩 **JSON Export** | Pipe structured data into your own tools |
 
 ---
@@ -74,6 +75,19 @@ acp -v daily -d 14
 acp -v monthly
 ```
 
+### Browse & resume past sessions
+
+List the sessions you worked on (last 30 days by default), pick one by number, and Claude Pulse re-opens it with `claude --resume` in its original folder:
+
+```bash
+acp -v sessions            # last 30 days
+acp -v sessions -d 60      # widen the window to 60 days
+acp -v sessions -p api     # only sessions in projects matching "api"
+acp -v sessions --list-only  # just print the list, don't prompt
+```
+
+Each row shows when you were last active, the project, message count, model, and the first thing you asked — so you can recognize the conversation at a glance. Type the `#` and you're back in it.
+
 ### JSON export
 
 ```bash
@@ -92,8 +106,9 @@ acp --plan max20
 
 | Flag | Description | Default |
 |------|-------------|:-------:|
-| `-v`, `--view` | Display mode — `realtime` · `daily` · `monthly` | `realtime` |
-| `-d`, `--days` | Days to show in daily view | `7` |
+| `-v`, `--view` | Display mode — `realtime` · `daily` · `monthly` · `sessions` | `realtime` |
+| `-d`, `--days` | Days to show in daily view (window for `sessions`, default 30) | `7` |
+| `--list-only` | `sessions` view: list without prompting to resume | — |
 | `-r`, `--refresh` | Refresh interval in seconds | `2` |
 | `-t`, `--theme` | Color theme — `light` · `dark` · `auto` | `auto` |
 | `-p`, `--project` | Filter by project path | _all_ |
