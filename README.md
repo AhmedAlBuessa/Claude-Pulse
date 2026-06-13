@@ -39,19 +39,34 @@
 
 ## 📦 Installation
 
+> **Beta:** the first PyPI release is on its way. Until then, install straight from GitHub — the commands below work today.
+
 Install with [`uv`](https://github.com/astral-sh/uv) (recommended):
 
 ```bash
-uv tool install claude-pulse
+uv tool install git+https://github.com/AhmedAlBuessa/Claude-Pulse
 ```
 
 …or with `pip`:
 
 ```bash
+pip install git+https://github.com/AhmedAlBuessa/Claude-Pulse
+```
+
+<details>
+<summary>📦 Once it's on PyPI (coming soon)</summary>
+
+```bash
+uv tool install claude-pulse
+# or
 pip install claude-pulse
 ```
 
+</details>
+
 > 💡 Two CLI aliases are installed: **`acp`** (recommended) and **`claude-pulse`**.
+>
+> 🪟 **Windows:** if `pip` isn't recognized, your Python `Scripts` folder isn't on `PATH`. Use `py -m pip install …` instead, or add `…\PythonXXX\Scripts` to `PATH`.
 
 ---
 
