@@ -98,7 +98,7 @@ def load_saved_limit() -> int | None:
     if not PULSE_CONFIG_FILE.exists():
         return None
     try:
-        data = json.loads(PULSE_CONFIG_FILE.read_text())
+        data = json.loads(PULSE_CONFIG_FILE.read_text(encoding="utf-8"))
         return data.get("calibrated_limit")
     except (json.JSONDecodeError, OSError):
         return None
@@ -110,8 +110,8 @@ def save_calibrated_limit(limit: int):
     data = {}
     if PULSE_CONFIG_FILE.exists():
         try:
-            data = json.loads(PULSE_CONFIG_FILE.read_text())
+            data = json.loads(PULSE_CONFIG_FILE.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             pass
     data["calibrated_limit"] = limit
-    PULSE_CONFIG_FILE.write_text(json.dumps(data, indent=2))
+    PULSE_CONFIG_FILE.write_text(json.dumps(data, indent=2), encoding="utf-8")

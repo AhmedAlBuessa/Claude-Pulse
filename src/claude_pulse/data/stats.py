@@ -13,7 +13,7 @@ def load_stats() -> Optional[StatsCache]:
         return None
 
     try:
-        raw = json.loads(STATS_CACHE_PATH.read_text())
+        raw = json.loads(STATS_CACHE_PATH.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
         return None
 

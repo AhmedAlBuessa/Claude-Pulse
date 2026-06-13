@@ -75,7 +75,7 @@ def _parse_conversation(path: str, project_dir: str) -> Optional[ConversationSta
     stats = ConversationStats(session_id=session_id, project=project)
 
     try:
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if not line:
@@ -190,7 +190,7 @@ def _count_user_messages_by_day(conv: ConversationStats, daily: dict, cutoff_str
         if not jsonl_path.exists():
             continue
         try:
-            with open(jsonl_path) as f:
+            with open(jsonl_path, encoding="utf-8") as f:
                 for line in f:
                     line = line.strip()
                     if not line:

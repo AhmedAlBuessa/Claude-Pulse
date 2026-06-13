@@ -21,7 +21,7 @@ def load_history(
     since_ms = int(since.timestamp() * 1000) if since else None
 
     try:
-        with open(HISTORY_PATH) as f:
+        with open(HISTORY_PATH, encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if not line:
