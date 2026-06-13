@@ -10,7 +10,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from claude_pulse.config import PLAN_LIMITS, short_model_name
+from claude_pulse.config import PLAN_LIMITS, load_saved_limit, short_model_name
 from claude_pulse.cost import calculate_cost_raw, format_cost, format_tokens
 from claude_pulse.data.conversations import (
     get_daily_usage,
@@ -20,10 +20,28 @@ from claude_pulse.data.conversations import (
     get_rolling_window_usage,
     load_all_conversations,
 )
+from claude_pulse.data.limits import get_live_usage
 from claude_pulse.data.sessions import get_active_sessions
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
+
+
+def _reset_in(resets_at: str | None) -> str | None:
+    """Human countdown like '2h 5m' until an ISO reset timestamp, or None."""
+    if not resets_at:
+        return None
+    try:
+        reset = datetime.fromisoformat(resets_at)
+    except (ValueError, TypeError):
+        return None
+    now = datetime.now(reset.tzinfo)
+    secs = (reset - now).total_seconds()
+    if secs <= 0:
+        return "now"
+    hours = int(secs // 3600)
+    mins = int((secs % 3600) // 60)
+    return f"{hours}h {mins}m" if hours > 0 else f"{mins}m"
 
 
 def _format_duration(ms: int) -> str:
@@ -325,28 +343,51 @@ def _build_plan_panel(window_usage: dict, plan: str, conversations: list,
     """Build the usage + burn rate + stats panel."""
     plan_info = PLAN_LIMITS.get(plan, PLAN_LIMITS["max5"])
     plan_name = plan_info["name"]
-    limit = plan_info["output_tokens"]
     window_h = plan_info["window_hours"]
     used = window_usage["output_tokens"]
-    pct = min(used / limit * 100, 100) if limit > 0 else 0
-    remaining = max(limit - used, 0)
 
-    # Burn rate
+    # Percentage source, best first:
+    #   live       — Anthropic's real session utilization (same as `claude`)
+    #   calibrated — user-supplied via `acp --calibrate`
+    #   est        — rough built-in token estimate
+    live = get_live_usage()
+    saved_limit = load_saved_limit()
+
+    week_pct = None
+    reset_str = None
+    if live and live.get("five_hour_pct") is not None:
+        source, source_label, source_color = "live", "live", "green"
+        pct = min(live["five_hour_pct"], 100)
+        reset_str = _reset_in(live.get("five_hour_resets_at"))
+        week_pct = live.get("seven_day_pct")
+    elif saved_limit is not None:
+        source, source_label, source_color = "cal", "calibrated", "green"
+        pct = min(used / saved_limit * 100, 100) if saved_limit > 0 else 0
+    else:
+        source, source_label, source_color = "est", "est·calibrate", "yellow"
+        limit = plan_info["output_tokens"]
+        pct = min(used / limit * 100, 100) if limit > 0 else 0
+
+    # Burn rate (output tokens/hr in the window) — informational in all modes.
     elapsed_min = window_usage["elapsed_minutes"]
     msgs_in_window = window_usage["messages"]
-    if elapsed_min > 0 and msgs_in_window > 0:
-        tokens_per_min = used / elapsed_min
-        tokens_per_hour = tokens_per_min * 60
-        if tokens_per_min > 0 and remaining > 0:
-            mins_left = remaining / tokens_per_min
+    tokens_per_hour = (used / elapsed_min * 60) if elapsed_min > 0 and msgs_in_window > 0 else 0
+
+    # ETA: live mode shows the real reset countdown; estimate modes project from burn.
+    if source == "live":
+        eta_str = f"resets {reset_str}" if reset_str else "—"
+    else:
+        limit = saved_limit if source == "cal" else plan_info["output_tokens"]
+        remaining = max(limit - used, 0)
+        if tokens_per_hour > 0 and remaining > 0:
+            mins_left = remaining / (tokens_per_hour / 60)
             hours_left = int(mins_left // 60)
             mins_rem = int(mins_left % 60)
             eta_str = f"{hours_left}h {mins_rem}m" if hours_left > 0 else f"{mins_rem}m"
+        elif remaining == 0:
+            eta_str = "at limit"
         else:
-            eta_str = "at limit" if remaining == 0 else "∞"
-    else:
-        tokens_per_hour = 0
-        eta_str = "idle"
+            eta_str = "idle" if tokens_per_hour == 0 else "∞"
 
     # Color based on percentage
     if pct >= 90:
@@ -369,7 +410,8 @@ def _build_plan_panel(window_usage: dict, plan: str, conversations: list,
         filled = int(pct / 100 * bar_w)
         empty = bar_w - filled
         text.append(f" {plan_name} ", style="bold")
-        text.append(f"~{pct:.0f}%\n", style=pct_color)
+        text.append(f"{pct:.0f}%", style=pct_color)
+        text.append(f" {source}\n", style=source_color)
         text.append(" ", style="dim")
         text.append("█" * filled, style=bar_color)
         text.append("░" * empty, style="dim")
@@ -391,19 +433,30 @@ def _build_plan_panel(window_usage: dict, plan: str, conversations: list,
 
         # Header
         text.append(f"  {plan_name}", style="bold")
-        text.append(f"  {window_h}h window\n", style="dim")
+        text.append(f"  {window_h}h window", style="dim")
+        text.append(f"  {source_label}\n", style=source_color)
 
         # Progress bar
         text.append("  ", style="dim")
         text.append("█" * filled, style=bar_color)
         text.append("░" * empty, style="dim")
-        text.append(f" ~{pct:.0f}%\n", style=pct_color)
+        pct_prefix = "" if source == "live" else "~"
+        text.append(f" {pct_prefix}{pct:.0f}%", style=pct_color)
+        if source == "live" and week_pct is not None:
+            text.append(f"   week {week_pct:.0f}%\n", style="dim")
+        else:
+            text.append("\n")
 
         # Usage line
-        text.append(f"  {format_tokens(used)}", style="bold")
-        text.append(f" / ~{format_tokens(limit)}", style="dim")
-        text.append(f"   ETA: ", style="dim")
-        text.append(f"{eta_str}\n", style=pct_color)
+        if source == "live":
+            text.append(f"  {format_tokens(used)} out", style="bold")
+            text.append("   ", style="dim")
+            text.append(f"{eta_str}\n", style=pct_color)
+        else:
+            text.append(f"  {format_tokens(used)}", style="bold")
+            text.append(f" / ~{format_tokens(limit)}", style="dim")
+            text.append(f"   ETA: ", style="dim")
+            text.append(f"{eta_str}\n", style=pct_color)
 
         # Burn rate
         text.append(f"  Burn: ", style="dim")

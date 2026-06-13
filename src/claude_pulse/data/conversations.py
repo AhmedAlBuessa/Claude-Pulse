@@ -74,6 +74,12 @@ def _parse_conversation(path: str, project_dir: str) -> Optional[ConversationSta
 
     stats = ConversationStats(session_id=session_id, project=project)
 
+    # Claude Code writes each assistant message to the log multiple times while
+    # it streams, and EVERY copy carries the full final `usage`. Summing them
+    # over-counts tokens (~2-3x). Dedupe by (message.id, requestId), keeping the
+    # last copy — it has the most complete content (tool_use) and the same usage.
+    assistant_by_key: dict = {}
+
     try:
         with open(path, encoding="utf-8") as f:
             for line in f:
@@ -99,35 +105,43 @@ def _parse_conversation(path: str, project_dir: str) -> Optional[ConversationSta
                     stats.messages += 1
 
                 elif msg_type == "assistant":
-                    stats.assistant_messages += 1
-                    stats.messages += 1
-
                     message = entry.get("message", {})
-                    model = message.get("model", "")
-                    usage = message.get("usage")
-
-                    if model:
-                        stats.models.add(model)
-
-                    if usage:
-                        stats.usage.append(MessageUsage(
-                            timestamp=timestamp,
-                            model=model,
-                            input_tokens=usage.get("input_tokens", 0),
-                            output_tokens=usage.get("output_tokens", 0),
-                            cache_read_tokens=usage.get("cache_read_input_tokens", 0),
-                            cache_create_tokens=usage.get("cache_creation_input_tokens", 0),
-                        ))
-
-                    # Count tool uses in content
-                    content = message.get("content", [])
-                    if isinstance(content, list):
-                        stats.tool_calls += sum(
-                            1 for c in content
-                            if isinstance(c, dict) and c.get("type") == "tool_use"
-                        )
+                    msg_id = message.get("id")
+                    req_id = entry.get("requestId")
+                    # Key that uniquely identifies one logical assistant message.
+                    # Fall back to the line uuid when ids are missing so we never
+                    # silently merge distinct messages.
+                    key = (msg_id, req_id) if msg_id else entry.get("uuid", id(entry))
+                    assistant_by_key[key] = (timestamp, message)
     except OSError:
         return None
+
+    # Fold the deduped assistant messages into the stats.
+    for timestamp, message in assistant_by_key.values():
+        stats.assistant_messages += 1
+        stats.messages += 1
+
+        model = message.get("model", "")
+        if model:
+            stats.models.add(model)
+
+        usage = message.get("usage")
+        if usage:
+            stats.usage.append(MessageUsage(
+                timestamp=timestamp,
+                model=model,
+                input_tokens=usage.get("input_tokens", 0),
+                output_tokens=usage.get("output_tokens", 0),
+                cache_read_tokens=usage.get("cache_read_input_tokens", 0),
+                cache_create_tokens=usage.get("cache_creation_input_tokens", 0),
+            ))
+
+        content = message.get("content", [])
+        if isinstance(content, list):
+            stats.tool_calls += sum(
+                1 for c in content
+                if isinstance(c, dict) and c.get("type") == "tool_use"
+            )
 
     if stats.messages == 0:
         return None

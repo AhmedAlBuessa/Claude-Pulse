@@ -29,7 +29,7 @@
 | 📅 **Daily Breakdown** | Per-day usage tables with customizable windows |
 | 📆 **Monthly Summary** | At-a-glance totals across each month |
 | 💰 **Cost Tracking** | Estimated spend by model, in real dollars |
-| 🎯 **Plan Limits** | Pro, Max 5, and Max 20 subscription calibration |
+| 🎯 **Live Plan Limits** | Real 5-hour & weekly usage, same numbers as `claude` and claude.ai/usage |
 | 🎨 **Themes** | Light, dark, or auto — matches your terminal |
 | 📁 **Project Filters** | Slice usage by working directory |
 | 🕘 **Session Resume** | Browse past sessions and jump back into one |
@@ -109,11 +109,18 @@ Each row shows when you were last active, the project, message count, model, and
 acp --json-output > usage.json
 ```
 
-### Plan-aware tracking
+### Live plan-usage
+
+The session bar shows your **real** 5-hour and weekly usage — the same numbers as `claude` and claude.ai/usage — pulled automatically from your existing Claude login. No setup.
 
 ```bash
-acp --plan max20
+acp                       # live bar appears automatically when you're logged in
+acp --check-usage         # diagnose if the live bar isn't showing
+acp --plan max20          # set your plan (used only for the fallback estimate)
+acp --calibrate 9         # offline fallback: pin the baseline to the % on claude.ai/usage
 ```
+
+> Live usage needs a Claude **subscription** login (Pro/Max). API-key users and offline runs fall back to a local token estimate.
 
 ---
 
@@ -127,7 +134,9 @@ acp --plan max20
 | `-r`, `--refresh` | Refresh interval in seconds | `2` |
 | `-t`, `--theme` | Color theme — `light` · `dark` · `auto` | `auto` |
 | `-p`, `--project` | Filter by project path | _all_ |
-| `--plan` | Subscription plan — `pro` · `max5` · `max20` | `pro` |
+| `--plan` | Subscription plan — `pro` · `max5` · `max20` (fallback when live usage is unavailable) | `pro` |
+| `--calibrate` | Set a manual session baseline from the `%` on claude.ai/usage (offline fallback) | — |
+| `--check-usage` | Diagnose whether live session-usage is working, and exit | — |
 | `--json-output` | Emit structured JSON to stdout | — |
 | `--version` | Show version and exit | — |
 
@@ -147,7 +156,9 @@ acp --plan max20
 
 ## 🧠 How it works
 
-Claude Pulse reads your local Claude Code conversation logs, aggregates tokens and tool calls, and renders them with [Rich](https://github.com/Textualize/rich) — no network calls, no telemetry, everything stays on your machine. 🔒
+Claude Pulse reads your local Claude Code conversation logs, aggregates tokens and tool calls, and renders them with [Rich](https://github.com/Textualize/rich). No telemetry — nothing about you is ever sent to us. 🔒
+
+For the **live plan-usage** bar it makes one request to Anthropic's own usage endpoint (`api.anthropic.com/api/oauth/usage`), authenticated with the OAuth token Claude Code already stored on your machine (the macOS Keychain, or `~/.claude/.credentials.json` elsewhere) — the same call `claude` itself makes. That's the only network call, it goes only to Anthropic, and if it's unavailable (API-key login, expired token, or offline) the dashboard falls back to a local estimate. Run `acp --check-usage` to see exactly what's happening.
 
 ---
 

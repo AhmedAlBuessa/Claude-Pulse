@@ -55,10 +55,26 @@ def _get_console(theme: str) -> Console:
     help="Subscription plan for limit tracking.",
 )
 @click.option("--json-output", "as_json", is_flag=True, help="Output as JSON.")
+@click.option(
+    "--calibrate",
+    type=float,
+    default=None,
+    metavar="PERCENT",
+    help="Calibrate the session limit: pass the %% claude.ai/usage shows right now.",
+)
+@click.option("--check-usage", is_flag=True, help="Diagnose live session-usage and exit.")
 @click.version_option(version=__version__, prog_name="claude-pulse")
-def main(view, days, list_only, theme, refresh, project, plan, as_json):
+def main(view, days, list_only, theme, refresh, project, plan, as_json, calibrate, check_usage):
     """Monitor your Claude Code usage."""
     console = _get_console(theme)
+
+    if check_usage:
+        _check_usage(console)
+        return
+
+    if calibrate is not None:
+        _calibrate(console, plan, calibrate)
+        return
 
     if as_json:
         _output_json(days, project)
@@ -78,6 +94,75 @@ def main(view, days, list_only, theme, refresh, project, plan, as_json):
     else:
         from claude_pulse.views.realtime import render_realtime
         render_realtime(console, refresh=refresh, plan=plan)
+
+
+def _check_usage(console: Console):
+    """Diagnose why live session-usage is or isn't available."""
+    from claude_pulse.data.limits import get_usage_status
+
+    status = get_usage_status()
+    console.print("[bold]Claude Pulse — live usage check[/bold]")
+    console.print(f"[dim]platform   :[/dim] {status['platform']}")
+    console.print(f"[dim]credentials:[/dim] {status['source']}")
+
+    if status["reason"] == "ok":
+        d = status["data"]
+        console.print("[info]✓ Live usage is working.[/info]")
+        if d.get("subscription"):
+            console.print(f"[dim]plan       :[/dim] {d['subscription']}")
+        fh = d.get("five_hour_pct")
+        sd = d.get("seven_day_pct")
+        if fh is not None:
+            console.print(f"[dim]5-hour     :[/dim] {fh:g}% used")
+        if sd is not None:
+            console.print(f"[dim]7-day      :[/dim] {sd:g}% used")
+        console.print("\n[dim]The dashboard will show these as the live bar.[/dim]")
+    else:
+        console.print(f"[warning]✗ Live usage unavailable[/warning] [dim]({status['reason']})[/dim]")
+        console.print(f"  {status['message']}")
+        console.print(
+            "\n[dim]The dashboard falls back to a token estimate. You can set a manual "
+            "baseline with[/dim] [bold]acp --calibrate <percent>[/bold][dim] "
+            "(the % from claude.ai/usage).[/dim]"
+        )
+
+
+def _calibrate(console: Console, plan: str, website_pct: float):
+    """Back-solve the real session limit from the % claude.ai/usage shows now.
+
+    Anthropic's session-usage percentage isn't available locally, so we infer
+    the limit: if the website says you're at P% and we measure U output tokens
+    in the current window, then 100% ~= U / (P/100).
+    """
+    from claude_pulse.config import PLAN_LIMITS, save_calibrated_limit
+    from claude_pulse.data.conversations import (
+        get_rolling_window_usage,
+        load_all_conversations,
+    )
+
+    if not (0 < website_pct <= 100):
+        console.print("[error]--calibrate expects a percentage between 0 and 100[/error]")
+        console.print("[dim]Read the current value from https://claude.ai/usage[/dim]")
+        return
+
+    plan_info = PLAN_LIMITS.get(plan, PLAN_LIMITS["max5"])
+    window = get_rolling_window_usage(
+        load_all_conversations(), window_hours=plan_info["window_hours"]
+    )
+    used = window["output_tokens"]
+    if used <= 0:
+        console.print("[warning]No usage in the current window — run Claude a bit, then calibrate.[/warning]")
+        return
+
+    limit = int(round(used / (website_pct / 100)))
+    save_calibrated_limit(limit)
+    console.print(
+        f"[info]Calibrated[/info] from {website_pct:g}% "
+        f"({used:,} output tokens in the last {plan_info['window_hours']}h)."
+    )
+    console.print(f"[info]Session limit set to[/info] {limit:,} output tokens / "
+                  f"{plan_info['window_hours']}h window.")
+    console.print("[dim]Re-run `acp` to see the calibrated bar. Recalibrate any time the website drifts.[/dim]")
 
 
 def _output_json(days: int, project: str = None):
