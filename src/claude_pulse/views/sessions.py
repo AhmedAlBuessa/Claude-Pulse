@@ -122,13 +122,30 @@ def render_sessions(
         console.print(f"[error]'{choice}' is not a valid number.[/error]")
         return
 
-    _resume(console, sessions[int(choice) - 1])
+    console.print()
+    console.print("  [bold cyan]1[/bold cyan]  Normal              [dim]claude --resume[/dim]")
+    console.print(
+        "  [bold cyan]2[/bold cyan]  Skip permissions    "
+        "[dim]claude --resume --dangerously-skip-permissions[/dim]"
+    )
+    mode = Prompt.ask(
+        "[bold cyan]Launch how[/bold cyan]",
+        choices=["1", "2", "q"],
+        default="1",
+        console=console,
+    ).strip().lower()
+
+    if mode in ("q", "quit"):
+        return
+
+    _resume(console, sessions[int(choice) - 1], skip_permissions=(mode == "2"))
 
 
-def _resume(console: Console, session: SessionSummary):
+def _resume(console: Console, session: SessionSummary, skip_permissions: bool = False):
     """Launch `claude --resume <id>` in the session's working directory."""
     cwd = session.cwd or os.getcwd()
-    cmd_display = f"claude --resume {session.session_id}"
+    extra_args = ["--dangerously-skip-permissions"] if skip_permissions else []
+    cmd_display = " ".join(["claude", "--resume", session.session_id, *extra_args])
 
     console.print()
     console.print(f"[bold]Resuming:[/bold] {_truncate(session.title, 70)}")
@@ -154,12 +171,12 @@ def _resume(console: Console, session: SessionSummary):
             # claude is a .cmd shim on Windows; run through the shell so PATH
             # resolution and the .cmd extension are handled correctly.
             subprocess.run(
-                f'claude --resume {session.session_id}',
+                cmd_display,
                 cwd=cwd, shell=True, check=False,
             )
         else:
             subprocess.run(
-                [claude_exe, "--resume", session.session_id],
+                [claude_exe, "--resume", session.session_id, *extra_args],
                 cwd=cwd, check=False,
             )
     except (OSError, subprocess.SubprocessError) as exc:
