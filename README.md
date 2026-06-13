@@ -176,6 +176,6 @@ Released under the [MIT License](LICENSE) — free to use, modify, and share.
 
 Made with ❤️ for the Claude Code community.
 
-<sub>If Claude Pulse saves you time, consider giving the repo a ⭐</sub>
+<sub>If Claude Pulse helps you time, consider giving the repo a ⭐</sub>
 
 </div>
