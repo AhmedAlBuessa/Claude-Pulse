@@ -47,6 +47,14 @@ Install with [`uv`](https://github.com/astral-sh/uv) (recommended):
 uv tool install git+https://github.com/AhmedAlBuessa/Claude-Pulse
 ```
 
+> 🪟 **Don't have `uv` yet?** Install it first (Windows / PowerShell), then re-open your terminal:
+>
+> ```powershell
+> powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+> ```
+>
+> On macOS / Linux: `curl -LsSf https://astral.sh/uv/install.sh | sh`
+
 …or with `pip`:
 
 ```bash
