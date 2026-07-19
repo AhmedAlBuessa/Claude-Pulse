@@ -11,6 +11,7 @@ Usage::
     acp-bar --uninstall    # remove the LaunchAgent
 """
 
+import os
 import shutil
 import subprocess
 import sys
@@ -26,7 +27,7 @@ from claude_pulse.data.conversations import get_plan_usage
 from claude_pulse.data.limits import get_live_usage
 
 REFRESH_SECONDS = 60
-BAR_WIDTH = 30  # matches the requested look; shrink (e.g. 10-15) if the menu bar truncates
+BAR_WIDTH = 10  # keep short — a wide title gets hidden/truncated in the menu bar
 LAUNCH_AGENT_LABEL = "com.claudepulse.menubar"
 LAUNCH_AGENT_PATH = Path.home() / "Library" / "LaunchAgents" / f"{LAUNCH_AGENT_LABEL}.plist"
 
@@ -36,6 +37,29 @@ def render_bar(pct: float, width: int = BAR_WIDTH) -> str:
     filled = int(pct / 100 * width)
     filled = max(0, min(filled, width))
     return "█" * filled + "░" * (width - filled) + f" {pct:.0f}%"
+
+
+def current_usage_pct(use_live: bool = False) -> float:
+    """Current usage percent.
+
+    Defaults to the fast local plan estimate (reads log files only). Live
+    utilization is opt-in because reading Anthropic's credential from the
+    keychain triggers a permission prompt from any binary that isn't Claude
+    Code itself — undesirable for an always-running menu-bar tool.
+    """
+    if use_live:
+        live = get_live_usage()
+        if live and live.get("five_hour_pct") is not None:
+            return min(live["five_hour_pct"], 100)
+    return get_plan_usage(load_saved_plan() or DEFAULT_PLAN)["pct"]
+
+
+def current_line() -> str:
+    """One-line menu-bar string, e.g. ``⚡██████░░░░ 69%``."""
+    try:
+        return "⚡" + render_bar(current_usage_pct())
+    except Exception:
+        return "⚡" + "░" * BAR_WIDTH + " ?%"
 
 
 def _acp_path() -> str:
@@ -71,22 +95,48 @@ def _plist_contents() -> str:
         "    <true/>\n"
         "    <key>ProcessType</key>\n"
         "    <string>Interactive</string>\n"
+        "    <key>LimitLoadToSessionType</key>\n"
+        "    <string>Aqua</string>\n"
+        "    <key>StandardOutPath</key>\n"
+        "    <string>/tmp/acp-bar.out.log</string>\n"
+        "    <key>StandardErrorPath</key>\n"
+        "    <string>/tmp/acp-bar.err.log</string>\n"
         "</dict>\n"
         "</plist>\n"
     )
 
 
+def _gui_domain() -> str:
+    """The user's GUI (Aqua) launchd domain, e.g. 'gui/501'."""
+    return f"gui/{os.getuid()}"
+
+
 def install_launch_agent() -> None:
     LAUNCH_AGENT_PATH.parent.mkdir(parents=True, exist_ok=True)
     LAUNCH_AGENT_PATH.write_text(_plist_contents())
-    subprocess.run(["launchctl", "unload", str(LAUNCH_AGENT_PATH)],
-                   capture_output=True)
-    subprocess.run(["launchctl", "load", str(LAUNCH_AGENT_PATH)], check=False)
+
+    domain = _gui_domain()
+    label = f"{domain}/{LAUNCH_AGENT_LABEL}"
+    # Bootstrap into the GUI session so the menu-bar item actually appears
+    # (a plain `launchctl load` targets the caller's domain, which may not be
+    # the Aqua session when run from SSH/a non-GUI shell).
+    subprocess.run(["launchctl", "bootout", label], capture_output=True)
+    r = subprocess.run(
+        ["launchctl", "bootstrap", domain, str(LAUNCH_AGENT_PATH)],
+        capture_output=True, text=True,
+    )
+    if r.returncode != 0:
+        # Older macOS fallback.
+        subprocess.run(["launchctl", "load", str(LAUNCH_AGENT_PATH)], check=False)
+    subprocess.run(["launchctl", "kickstart", "-k", label], capture_output=True)
+
     print(f"Installed LaunchAgent at {LAUNCH_AGENT_PATH}")
-    print("Claude Pulse menu bar will now start automatically on login.")
+    print("Claude Pulse menu bar is now running and will start on every login.")
 
 
 def uninstall_launch_agent() -> None:
+    label = f"{_gui_domain()}/{LAUNCH_AGENT_LABEL}"
+    subprocess.run(["launchctl", "bootout", label], capture_output=True)
     if LAUNCH_AGENT_PATH.exists():
         subprocess.run(["launchctl", "unload", str(LAUNCH_AGENT_PATH)],
                        capture_output=True)
@@ -141,9 +191,9 @@ def _build_app():
                     pct = min(live["five_hour_pct"], 100)
                 else:
                     pct = get_plan_usage(self._plan)["pct"]
-                self.title = render_bar(pct)
+                self.title = "⚡" + render_bar(pct)
             except Exception:
-                self.title = "░" * BAR_WIDTH + " ?%"
+                self.title = "⚡" + "░" * BAR_WIDTH + " ?%"
 
         def _on_refresh(self, _sender):
             self._refresh()
@@ -162,6 +212,12 @@ def _build_app():
 
 def main() -> None:
     args = sys.argv[1:]
+    if "--print" in args:
+        # Emit a single menu-bar line and exit. Used by the native Swift
+        # menu-bar host (macOS renders status items reliably only from a
+        # proper app bundle; a bare Python process does not on macOS 26+).
+        print(current_line())
+        return
     if "--install" in args:
         install_launch_agent()
         return
@@ -181,7 +237,18 @@ def main() -> None:
             "  # or: pip install 'claude-pulse[menubar]'"
         )
 
-    _build_app().run()
+    app = _build_app()
+
+    # Run as a menu-bar-only accessory app — no Dock icon, no app switcher entry.
+    try:
+        import AppKit
+        AppKit.NSApplication.sharedApplication().setActivationPolicy_(
+            AppKit.NSApplicationActivationPolicyAccessory
+        )
+    except Exception:
+        pass
+
+    app.run()
 
 
 if __name__ == "__main__":

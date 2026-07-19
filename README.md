@@ -144,28 +144,41 @@ acp --calibrate 9         # offline fallback: pin the baseline to the % on claud
 
 ## 🍎 macOS Menu Bar
 
-Keep a live usage bar in your menu bar (macOS only — requires the [`menubar` extra](#-installation)):
-
-```bash
-acp-bar
-```
-
-You'll see your current 5-hour usage right in the menu bar:
+Keep a live usage bar in your menu bar:
 
 ```text
-░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ 1%
+⚡██████░░░░ 69%
 ```
 
-It shows your **real** utilization from Anthropic's usage endpoint — the same number as `claude` and claude.ai/usage — and falls back to the local plan estimate if you're not logged in. It refreshes every 60 seconds. From its dropdown you can **switch plan** (Pro · Max 5x · Max 20x, used for the fallback estimate — the choice is remembered), **refresh now**, or **open the full dashboard** in Terminal.
+It refreshes every 60 seconds and its dropdown lets you **refresh now** or **open the full dashboard** in Terminal.
 
-### Start automatically on login
+### Recommended: the native menu-bar app (macOS 13+, incl. Tahoe)
+
+Modern macOS (26 / Tahoe) will not render a menu-bar item created by a bare Python process, so Claude Pulse ships a tiny **native Swift menu-bar app** that renders reliably and calls the tool for the number. Build and install it (requires Xcode command-line tools for `swiftc`):
 
 ```bash
-acp-bar --install     # install a LaunchAgent so the bar starts on login
-acp-bar --uninstall   # remove it
+# from a clone of this repo
+bash packaging/ClaudePulseBar/build.sh          # builds ~/Applications/ClaudePulseBar.app
+open ~/Applications/ClaudePulseBar.app          # launch it now
 ```
 
-> 💡 The bar is 30 blocks wide by default to match a full-width look. If macOS truncates it, lower `BAR_WIDTH` in `src/claude_pulse/menubar.py` (e.g. to `10`–`15`).
+To start it automatically on login, add it in **System Settings → General → Login Items**, or run:
+
+```bash
+osascript -e 'tell application "System Events" to make login item at end with properties {path:(POSIX path of (path to home folder)) & "Applications/ClaudePulseBar.app"}'
+```
+
+The app displays the output of `acp-bar --print` (the fast local plan estimate — no keychain prompts). Switch the plan it estimates against with `acp --plan max20` once, or by editing `~/.claude-pulse/config.json`.
+
+### Python menu-bar app (older macOS)
+
+On macOS versions that still render status items from Python, you can run the built-in app directly (requires the [`menubar` extra](#-installation)):
+
+```bash
+acp-bar               # run it
+acp-bar --install     # install a LaunchAgent so it starts on login
+acp-bar --uninstall   # remove it
+```
 
 ---
 
