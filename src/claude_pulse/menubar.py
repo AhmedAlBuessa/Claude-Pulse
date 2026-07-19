@@ -30,6 +30,11 @@ from claude_pulse.data.limits import get_live_usage
 
 REFRESH_SECONDS = 60
 BAR_WIDTH = 10  # keep short — a wide title gets hidden/truncated in the menu bar
+# Reuse a disk-cached live value for this long before re-fetching. Each
+# `--print` is a fresh process, so the in-memory cache never helps; without
+# this we'd call the usage endpoint on every refresh and get rate-limited (429).
+LIVE_CACHE_TTL = 150
+LIVE_STALE_MAX = 10800  # accept a last-good value up to 3h old when a fetch fails
 LAUNCH_AGENT_LABEL = "com.claudepulse.menubar"
 LAUNCH_AGENT_PATH = Path.home() / "Library" / "LaunchAgents" / f"{LAUNCH_AGENT_LABEL}.plist"
 
@@ -51,12 +56,19 @@ def current_usage_pct(use_live: bool = False) -> float:
     estimate, which over-counts and reads a misleading 100%.
     """
     if use_live:
+        # Serve a recent disk-cached value without hitting the endpoint, so
+        # frequent refreshes don't get rate-limited (HTTP 429).
+        cached = load_last_live_pct(max_age_seconds=LIVE_CACHE_TTL)
+        if cached is not None:
+            return cached
         live = get_live_usage()
         if live and live.get("five_hour_pct") is not None:
             pct = min(live["five_hour_pct"], 100)
             save_last_live_pct(pct)
             return pct
-        last = load_last_live_pct()
+        # Fetch failed (429, offline, expired token). Show the last good value
+        # rather than the local estimate, which over-counts and reads 100%.
+        last = load_last_live_pct(max_age_seconds=LIVE_STALE_MAX)
         if last is not None:
             return last
     return get_plan_usage(load_saved_plan() or DEFAULT_PLAN)["pct"]
