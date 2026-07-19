@@ -147,7 +147,7 @@ acp --calibrate 9         # offline fallback: pin the baseline to the % on claud
 Keep a live usage bar in your menu bar — the Claude mark next to a compact bar:
 
 ```text
-✳ ██████░░░░ 69%
+✳ ━━━━━━──── 69%
 ```
 
 Click it for the full breakdown, mirroring claude.ai/usage:
