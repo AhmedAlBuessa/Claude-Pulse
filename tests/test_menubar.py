@@ -10,14 +10,14 @@ import claude_pulse.data.limits as lim
 # ── render_bar ────────────────────────────────────────────────────────────────
 
 def test_render_bar_basic():
-    assert mb.render_bar(0, 10) == "─" * 10 + " 0%"
-    assert mb.render_bar(100, 10) == "━" * 10 + " 100%"
-    assert mb.render_bar(50, 10) == "━" * 5 + "─" * 5 + " 50%"
+    assert mb.render_bar(0, 10) == "□" * 10 + " 0%"
+    assert mb.render_bar(100, 10) == "■" * 10 + " 100%"
+    assert mb.render_bar(50, 10) == "■" * 5 + "□" * 5 + " 50%"
 
 
 def test_render_bar_clamps_out_of_range():
-    assert mb.render_bar(150, 10).startswith("━" * 10)   # never overflows
-    assert mb.render_bar(-5, 10).startswith("─")          # never negative
+    assert mb.render_bar(150, 10).startswith("■" * 10)   # never overflows
+    assert mb.render_bar(-5, 10).startswith("□")          # never negative
 
 
 # ── current_usage: the source/fallback tiers ─────────────────────────────────

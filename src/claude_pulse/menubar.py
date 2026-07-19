@@ -1,7 +1,7 @@
 """macOS menu-bar usage indicator for Claude Pulse.
 
-Shows the current rolling-window usage as a thin-line bar in the menu bar, e.g.
-``━━━───────── 1%``, refreshing on a timer. Requires the
+Shows the current rolling-window usage as a squares bar in the menu bar, e.g.
+``■■■□□□□□□□ 1%``, refreshing on a timer. Requires the
 ``[menubar]`` extra (``rumps``) and only runs on macOS.
 
 Usage::
@@ -42,10 +42,10 @@ LAUNCH_AGENT_PATH = Path.home() / "Library" / "LaunchAgents" / f"{LAUNCH_AGENT_L
 
 
 def render_bar(pct: float, width: int = BAR_WIDTH) -> str:
-    """Render a thin-line usage bar, e.g. ``━━━───── 1%``."""
+    """Render a usage bar with squares, e.g. ``■■■□□□□ 1%``."""
     filled = int(pct / 100 * width)
     filled = max(0, min(filled, width))
-    return "━" * filled + "─" * (width - filled) + f" {pct:.0f}%"
+    return "■" * filled + "□" * (width - filled) + f" {pct:.0f}%"
 
 
 def _live_snapshot() -> tuple[dict | None, str]:
@@ -87,7 +87,7 @@ def current_usage_pct(use_live: bool = True) -> float:
 
 
 def status_text() -> str:
-    """Menu-bar text (no icon): bar + %, e.g. ``━━━━━━──── 69%``.
+    """Menu-bar text (no icon): bar + %, e.g. ``■■■■■■□□□□ 69%``.
 
     A trailing marker distinguishes non-live values so a fallback can never be
     mistaken for real usage: ``·`` = last-known (stale), ``≈`` = local estimate.
@@ -98,7 +98,7 @@ def status_text() -> str:
         marker = {"stale": " ·", "estimate": " ≈"}.get(source, "")
         return render_bar(pct) + marker
     except Exception:
-        return "─" * BAR_WIDTH + " ?%"
+        return "□" * BAR_WIDTH + " ?%"
 
 
 def current_line() -> str:

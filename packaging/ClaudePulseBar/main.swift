@@ -112,7 +112,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             image = NSImage(contentsOfFile: Bundle.main.bundlePath + "/Contents/Resources/claude-logo.png")
         }
-        image?.size = NSSize(width: 15, height: 15)
+        image?.size = NSSize(width: 18, height: 18)
         image?.isTemplate = false  // keep the logo's own (orange) color
         return image
     }
