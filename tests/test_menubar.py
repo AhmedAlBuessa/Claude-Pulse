@@ -23,9 +23,9 @@ def test_render_bar_clamps_out_of_range():
 # ── current_usage: the source/fallback tiers ─────────────────────────────────
 
 def test_recent_cache_is_served_without_fetching(monkeypatch):
-    """A fresh cached value must be used directly — no endpoint call (avoids 429)."""
-    monkeypatch.setattr(mb, "load_last_live_pct",
-                        lambda max_age_seconds: 24.0 if max_age_seconds == mb.LIVE_CACHE_TTL else None)
+    """A fresh cached snapshot must be used directly — no endpoint call (avoids 429)."""
+    monkeypatch.setattr(mb, "load_live_snapshot",
+                        lambda max_age_seconds: {"five_hour_pct": 24.0} if max_age_seconds == mb.LIVE_CACHE_TTL else None)
     calls = {"n": 0}
     def spy(*a, **k):
         calls["n"] += 1
@@ -37,19 +37,19 @@ def test_recent_cache_is_served_without_fetching(monkeypatch):
 
 
 def test_successful_fetch_is_saved(monkeypatch):
-    monkeypatch.setattr(mb, "load_last_live_pct", lambda max_age_seconds: None)
-    monkeypatch.setattr(mb, "get_live_usage", lambda *a, **k: {"five_hour_pct": 31.0})
+    monkeypatch.setattr(mb, "load_live_snapshot", lambda max_age_seconds: None)
+    monkeypatch.setattr(mb, "get_live_usage", lambda *a, **k: {"five_hour_pct": 31.0, "limits": []})
     saved = {}
-    monkeypatch.setattr(mb, "save_last_live_pct", lambda p: saved.__setitem__("p", p))
+    monkeypatch.setattr(mb, "save_live_snapshot", lambda d: saved.__setitem__("d", d))
 
     assert mb.current_usage(use_live=True) == (31.0, "live")
-    assert saved["p"] == 31.0
+    assert saved["d"]["five_hour_pct"] == 31.0
 
 
 def test_fetch_over_100_is_clamped(monkeypatch):
-    monkeypatch.setattr(mb, "load_last_live_pct", lambda max_age_seconds: None)
+    monkeypatch.setattr(mb, "load_live_snapshot", lambda max_age_seconds: None)
     monkeypatch.setattr(mb, "get_live_usage", lambda *a, **k: {"five_hour_pct": 130.0})
-    monkeypatch.setattr(mb, "save_last_live_pct", lambda p: None)
+    monkeypatch.setattr(mb, "save_live_snapshot", lambda d: None)
 
     pct, source = mb.current_usage(use_live=True)
     assert pct == 100 and source == "live"
@@ -57,8 +57,8 @@ def test_fetch_over_100_is_clamped(monkeypatch):
 
 def test_failed_fetch_uses_last_good_not_estimate(monkeypatch):
     """The key regression: a failed fetch must show the last real value, not 100%."""
-    monkeypatch.setattr(mb, "load_last_live_pct",
-                        lambda max_age_seconds: 24.0 if max_age_seconds == mb.LIVE_STALE_MAX else None)
+    monkeypatch.setattr(mb, "load_live_snapshot",
+                        lambda max_age_seconds: {"five_hour_pct": 24.0} if max_age_seconds == mb.LIVE_STALE_MAX else None)
     monkeypatch.setattr(mb, "get_live_usage", lambda *a, **k: None)
     # Estimate would say 100 — must NOT be used while a recent real value exists.
     monkeypatch.setattr(mb, "get_plan_usage", lambda plan: {"pct": 100.0})
@@ -68,12 +68,33 @@ def test_failed_fetch_uses_last_good_not_estimate(monkeypatch):
 
 
 def test_estimate_only_when_no_live_value_exists(monkeypatch):
-    monkeypatch.setattr(mb, "load_last_live_pct", lambda max_age_seconds: None)
+    monkeypatch.setattr(mb, "load_live_snapshot", lambda max_age_seconds: None)
     monkeypatch.setattr(mb, "get_live_usage", lambda *a, **k: None)
     monkeypatch.setattr(mb, "get_plan_usage", lambda plan: {"pct": 100.0})
     monkeypatch.setattr(mb, "load_saved_plan", lambda: "pro")
 
     assert mb.current_usage(use_live=True) == (100.0, "estimate")
+
+
+# ── menu_details: the dropdown breakdown ─────────────────────────────────────
+
+def test_menu_details_lists_session_and_models(monkeypatch):
+    snapshot = {
+        "five_hour_pct": 44.0,
+        "limits": [
+            {"kind": "session", "percent": 44, "resets_at": "2999-01-01T00:00:00+00:00"},
+            {"kind": "weekly_all", "percent": 39, "resets_at": "2999-01-02T05:00:00+00:00"},
+            {"kind": "weekly_scoped", "percent": 10, "resets_at": "2999-01-02T05:00:00+00:00",
+             "scope": {"model": {"display_name": "Fable"}}},
+        ],
+    }
+    monkeypatch.setattr(mb, "load_live_snapshot",
+                        lambda max_age_seconds: snapshot if max_age_seconds == mb.LIVE_CACHE_TTL else None)
+
+    lines = mb.menu_details()
+    assert any(l.startswith("Session · 44% used · resets in") for l in lines)
+    assert any(l.startswith("All models · 39% used · resets") for l in lines)
+    assert any(l.startswith("Fable · 10% used · resets") for l in lines)
 
 
 # ── current_line: a fallback must be visibly marked ──────────────────────────

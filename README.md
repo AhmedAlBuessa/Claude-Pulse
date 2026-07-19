@@ -144,13 +144,25 @@ acp --calibrate 9         # offline fallback: pin the baseline to the % on claud
 
 ## 🍎 macOS Menu Bar
 
-Keep a live usage bar in your menu bar:
+Keep a live usage bar in your menu bar — the Claude mark next to a compact bar:
 
 ```text
-⚡██████░░░░ 69%
+✳ ██████░░░░ 69%
 ```
 
-It refreshes every 60 seconds and its dropdown lets you **refresh now** or **open the full dashboard** in Terminal.
+Click it for the full breakdown, mirroring claude.ai/usage:
+
+```text
+Session · 48% used · resets in 59m
+All models · 40% used · resets Wed 10:59 PM
+Fable · 10% used · resets Wed 10:59 PM
+─────────────
+Refresh now
+Open dashboard
+Quit
+```
+
+It refreshes every 60 seconds.
 
 ### Recommended: the native menu-bar app (macOS 13+, incl. Tahoe)
 

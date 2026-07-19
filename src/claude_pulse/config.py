@@ -161,21 +161,21 @@ def save_selected_plan(plan: str):
         _update_config({"plan": plan})
 
 
-def save_last_live_pct(pct: float) -> None:
-    """Remember the last successfully-fetched live usage percentage."""
-    _update_config({"last_live_pct": pct, "last_live_at": time.time()})
+def save_live_snapshot(data: dict) -> None:
+    """Remember the last successfully-fetched live usage snapshot."""
+    _update_config({"live_snapshot": data, "live_snapshot_at": time.time()})
 
 
-def load_last_live_pct(max_age_seconds: float = 10800) -> float | None:
-    """Last known live percentage, if fetched within max_age_seconds (default 3h)."""
+def load_live_snapshot(max_age_seconds: float = 10800) -> dict | None:
+    """Last live snapshot, if fetched within max_age_seconds (default 3h)."""
     if not PULSE_CONFIG_FILE.exists():
         return None
     try:
         data = json.loads(PULSE_CONFIG_FILE.read_text(encoding="utf-8"))
-        pct = data.get("last_live_pct")
-        at = data.get("last_live_at", 0)
-        if pct is not None and (time.time() - at) <= max_age_seconds:
-            return pct
+        snap = data.get("live_snapshot")
+        at = data.get("live_snapshot_at", 0)
+        if snap is not None and (time.time() - at) <= max_age_seconds:
+            return snap
     except (json.JSONDecodeError, OSError, TypeError):
         return None
     return None

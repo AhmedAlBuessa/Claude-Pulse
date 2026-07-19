@@ -16,14 +16,15 @@ import os
 import shutil
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 from claude_pulse.config import (
     DEFAULT_PLAN,
     PLAN_LIMITS,
-    load_last_live_pct,
+    load_live_snapshot,
     load_saved_plan,
-    save_last_live_pct,
+    save_live_snapshot,
     save_selected_plan,
 )
 from claude_pulse.data.conversations import get_plan_usage
@@ -47,32 +48,36 @@ def render_bar(pct: float, width: int = BAR_WIDTH) -> str:
     return "█" * filled + "░" * (width - filled) + f" {pct:.0f}%"
 
 
-def current_usage(use_live: bool = True) -> tuple[float, str]:
-    """Return (percent, source).
+def _live_snapshot() -> tuple[dict | None, str]:
+    """Full live usage snapshot (disk-cached) with its freshness source.
 
-    source is one of:
-      "live"     — a fresh or recently-cached real utilization value
-      "stale"    — a real value that's older than the cache window (fetch failed)
-      "estimate" — the local plan estimate (no live value available at all)
+    source is "live" (fresh or recently-cached), "stale" (older than the cache
+    window because a fetch failed), or "estimate" (no live value at all).
 
-    The real 5-hour utilization comes from Anthropic's usage endpoint. That
-    fetch can fail transiently — after sleep, offline, an expired token, or
-    HTTP 429 rate-limiting. We serve a disk-cached value between fetches so
-    frequent refreshes don't get rate-limited, and fall back to the last good
-    value (not the over-counting estimate) when a fetch fails.
+    The snapshot comes from Anthropic's usage endpoint. Since each `--print`
+    is a fresh process, we cache it on disk and only re-fetch every
+    LIVE_CACHE_TTL — otherwise every refresh hits the endpoint and gets
+    rate-limited (HTTP 429).
     """
+    fresh = load_live_snapshot(max_age_seconds=LIVE_CACHE_TTL)
+    if fresh is not None:
+        return fresh, "live"
+    data = get_live_usage()
+    if data and data.get("five_hour_pct") is not None:
+        save_live_snapshot(data)
+        return data, "live"
+    stale = load_live_snapshot(max_age_seconds=LIVE_STALE_MAX)
+    if stale is not None:
+        return stale, "stale"
+    return None, "estimate"
+
+
+def current_usage(use_live: bool = True) -> tuple[float, str]:
+    """Return (percent, source) for the 5-hour window (see :func:`_live_snapshot`)."""
     if use_live:
-        cached = load_last_live_pct(max_age_seconds=LIVE_CACHE_TTL)
-        if cached is not None:
-            return cached, "live"
-        live = get_live_usage()
-        if live and live.get("five_hour_pct") is not None:
-            pct = min(live["five_hour_pct"], 100)
-            save_last_live_pct(pct)
-            return pct, "live"
-        last = load_last_live_pct(max_age_seconds=LIVE_STALE_MAX)
-        if last is not None:
-            return last, "stale"
+        snap, source = _live_snapshot()
+        if snap is not None and snap.get("five_hour_pct") is not None:
+            return min(snap["five_hour_pct"], 100), source
     return get_plan_usage(load_saved_plan() or DEFAULT_PLAN)["pct"], "estimate"
 
 
@@ -81,18 +86,90 @@ def current_usage_pct(use_live: bool = True) -> float:
     return current_usage(use_live=use_live)[0]
 
 
-def current_line() -> str:
-    """One-line menu-bar string, e.g. ``⚡██████░░░░ 69%``.
+def status_text() -> str:
+    """Menu-bar text (no icon): bar + %, e.g. ``██████░░░░ 69%``.
 
     A trailing marker distinguishes non-live values so a fallback can never be
     mistaken for real usage: ``·`` = last-known (stale), ``≈`` = local estimate.
+    The native app supplies the Claude logo alongside this text.
     """
     try:
         pct, source = current_usage(use_live=True)
         marker = {"stale": " ·", "estimate": " ≈"}.get(source, "")
-        return "⚡" + render_bar(pct) + marker
+        return render_bar(pct) + marker
     except Exception:
-        return "⚡" + "░" * BAR_WIDTH + " ?%"
+        return "░" * BAR_WIDTH + " ?%"
+
+
+def current_line() -> str:
+    """Text with a ``⚡`` prefix, for text-only menu bars (the rumps app)."""
+    return "⚡" + status_text()
+
+
+def _parse_iso(value: str) -> datetime:
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+def _reset_countdown(resets_at: str) -> str:
+    """'1h 9m' until an ISO reset timestamp (UTC-aware), or '' if unparseable."""
+    try:
+        secs = int((_parse_iso(resets_at) - datetime.now(timezone.utc)).total_seconds())
+    except (ValueError, TypeError, AttributeError):
+        return ""
+    if secs <= 0:
+        return "now"
+    hours, mins = secs // 3600, (secs % 3600) // 60
+    return f"{hours}h {mins}m" if hours else f"{mins}m"
+
+
+def _reset_absolute(resets_at: str) -> str:
+    """Local wall-clock like 'Wed 11:00 PM', or '' if unparseable."""
+    try:
+        dt = _parse_iso(resets_at).astimezone()
+    except (ValueError, TypeError, AttributeError):
+        return ""
+    hour = dt.strftime("%I").lstrip("0") or "12"  # %-I isn't portable
+    return dt.strftime(f"%a {hour}:%M %p")
+
+
+def menu_details() -> list[str]:
+    """Lines for the dropdown: session countdown + per-limit / per-model breakdown."""
+    snap, source = _live_snapshot()
+    if not snap:
+        return ["Live usage unavailable — run `claude` once"]
+
+    lines: list[str] = []
+    limits = snap.get("limits") or []
+
+    def _pct(entry) -> int:
+        return int(entry.get("percent") or 0)
+
+    for entry in (e for e in limits if e.get("kind") == "session"):
+        cd = _reset_countdown(entry.get("resets_at"))
+        tail = f" · resets in {cd}" if cd else ""
+        lines.append(f"Session · {_pct(entry)}% used{tail}")
+
+    for entry in (e for e in limits if e.get("kind") == "weekly_all"):
+        when = _reset_absolute(entry.get("resets_at"))
+        tail = f" · resets {when}" if when else ""
+        lines.append(f"All models · {_pct(entry)}% used{tail}")
+
+    for entry in (e for e in limits if e.get("kind") == "weekly_scoped"):
+        model = ((entry.get("scope") or {}).get("model") or {}).get("display_name") or "Model"
+        when = _reset_absolute(entry.get("resets_at"))
+        tail = f" · resets {when}" if when else ""
+        lines.append(f"{model} · {_pct(entry)}% used{tail}")
+
+    if not lines:  # snapshot predates the per-limit breakdown
+        pct = snap.get("five_hour_pct")
+        if pct is not None:
+            cd = _reset_countdown(snap.get("five_hour_resets_at"))
+            tail = f" · resets in {cd}" if cd else ""
+            lines.append(f"Session · {int(pct)}% used{tail}")
+
+    if source == "stale":
+        lines.append("(last known — reconnecting)")
+    return lines
 
 
 def print_check() -> None:
@@ -103,7 +180,7 @@ def print_check() -> None:
     from claude_pulse.data.limits import get_usage_status
 
     pct, source = current_usage(use_live=True)
-    print(f"Menu-bar line : {current_line()}")
+    print(f"Menu-bar text : {status_text()}")
     print(f"Value source  : {source}")
 
     status = get_usage_status()
@@ -112,16 +189,20 @@ def print_check() -> None:
     if data.get("five_hour_pct") is not None:
         print(f"Live 5-hour   : {data['five_hour_pct']:.0f}%")
 
-    cached = load_last_live_pct(max_age_seconds=LIVE_STALE_MAX)
-    if cached is not None and PULSE_CONFIG_FILE.exists():
+    snap = load_live_snapshot(max_age_seconds=LIVE_STALE_MAX)
+    if snap is not None and PULSE_CONFIG_FILE.exists():
         try:
-            data = json.loads(PULSE_CONFIG_FILE.read_text(encoding="utf-8"))
-            age = int(time.time() - data.get("last_live_at", 0))
-            print(f"Cached value  : {cached:.0f}%  ({age}s old)")
+            cfg = json.loads(PULSE_CONFIG_FILE.read_text(encoding="utf-8"))
+            age = int(time.time() - cfg.get("live_snapshot_at", 0))
+            print(f"Cached value  : {int(snap.get('five_hour_pct', 0))}%  ({age}s old)")
         except (json.JSONDecodeError, OSError):
             pass
     else:
         print("Cached value  : none yet")
+
+    print("Dropdown      :")
+    for line in menu_details():
+        print(f"  {line}")
 
     if source == "estimate":
         print("\nShowing the local ESTIMATE (over-counts). Live usage is "
@@ -252,17 +333,7 @@ def _build_app():
                 item.state = 1 if key == self._plan else 0
 
         def _refresh(self):
-            try:
-                # Prefer Anthropic's real 5-hour utilization (matches `claude`
-                # and claude.ai/usage); fall back to the local plan estimate.
-                live = get_live_usage()
-                if live and live.get("five_hour_pct") is not None:
-                    pct = min(live["five_hour_pct"], 100)
-                else:
-                    pct = get_plan_usage(self._plan)["pct"]
-                self.title = "⚡" + render_bar(pct)
-            except Exception:
-                self.title = "⚡" + "░" * BAR_WIDTH + " ?%"
+            self.title = current_line()
 
         def _on_refresh(self, _sender):
             self._refresh()
@@ -285,10 +356,20 @@ def main() -> None:
         print_check()
         return
     if "--print" in args:
-        # Emit a single menu-bar line and exit. Used by the native Swift
-        # menu-bar host (macOS renders status items reliably only from a
-        # proper app bundle; a bare Python process does not on macOS 26+).
-        print(current_line())
+        # The menu-bar text only (the native app draws the Claude logo beside it).
+        print(status_text())
+        return
+    if "--details" in args:
+        # The dropdown breakdown, one line per menu item.
+        for line in menu_details():
+            print(line)
+        return
+    if "--menu" in args:
+        # Everything the native app needs in one call: line 1 is the title
+        # text, the rest are the dropdown items. One process → one endpoint hit.
+        print(status_text())
+        for line in menu_details():
+            print(line)
         return
     if "--install" in args:
         install_launch_agent()

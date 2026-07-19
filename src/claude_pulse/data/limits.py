@@ -124,6 +124,9 @@ def _fetch_usage() -> tuple[dict | None, str]:
         "five_hour_resets_at": fh.get("resets_at"),
         "seven_day_pct": sd.get("utilization"),
         "seven_day_resets_at": sd.get("resets_at"),
+        # Per-limit breakdown (session, weekly_all, per-model weekly_scoped) —
+        # powers the menu-bar dropdown.
+        "limits": raw.get("limits") or [],
         "subscription": (oauth.get("subscriptionType") or raw.get("subscription_type")),
     }
     return data, "ok"
