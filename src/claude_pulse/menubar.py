@@ -55,9 +55,13 @@ def current_usage_pct(use_live: bool = False) -> float:
 
 
 def current_line() -> str:
-    """One-line menu-bar string, e.g. ``⚡██████░░░░ 69%``."""
+    """One-line menu-bar string, e.g. ``⚡██████░░░░ 69%``.
+
+    Uses the real live utilization (matches ``claude`` / claude.ai/usage),
+    falling back to the local plan estimate if it can't be read.
+    """
     try:
-        return "⚡" + render_bar(current_usage_pct())
+        return "⚡" + render_bar(current_usage_pct(use_live=True))
     except Exception:
         return "⚡" + "░" * BAR_WIDTH + " ?%"
 
