@@ -2,6 +2,7 @@
 
 import json
 import re
+import time
 from pathlib import Path
 
 CLAUDE_DIR = Path.home() / ".claude"
@@ -158,6 +159,26 @@ def save_selected_plan(plan: str):
     """Persist the plan selected in the menu bar."""
     if plan in PLAN_LIMITS:
         _update_config({"plan": plan})
+
+
+def save_last_live_pct(pct: float) -> None:
+    """Remember the last successfully-fetched live usage percentage."""
+    _update_config({"last_live_pct": pct, "last_live_at": time.time()})
+
+
+def load_last_live_pct(max_age_seconds: float = 10800) -> float | None:
+    """Last known live percentage, if fetched within max_age_seconds (default 3h)."""
+    if not PULSE_CONFIG_FILE.exists():
+        return None
+    try:
+        data = json.loads(PULSE_CONFIG_FILE.read_text(encoding="utf-8"))
+        pct = data.get("last_live_pct")
+        at = data.get("last_live_at", 0)
+        if pct is not None and (time.time() - at) <= max_age_seconds:
+            return pct
+    except (json.JSONDecodeError, OSError, TypeError):
+        return None
+    return None
 
 
 def _update_config(updates: dict):

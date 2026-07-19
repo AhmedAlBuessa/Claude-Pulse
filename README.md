@@ -168,7 +168,7 @@ To start it automatically on login, add it in **System Settings → General → 
 osascript -e 'tell application "System Events" to make login item at end with properties {path:(POSIX path of (path to home folder)) & "Applications/ClaudePulseBar.app"}'
 ```
 
-The app displays the output of `acp-bar --print`, which shows your **real** 5-hour utilization from Anthropic's usage endpoint (the same number as `claude` and claude.ai/usage), falling back to the local plan estimate if it can't read your credentials. The first read may prompt once for keychain access — click **Always Allow**.
+The app displays the output of `acp-bar --print`, which shows your **real** 5-hour utilization from Anthropic's usage endpoint (the same number as `claude` and claude.ai/usage). If a fetch fails transiently (after sleep, offline, or an expired token), it shows your last known real value rather than jumping to a misleading estimate. The first read may prompt once for keychain access — click **Always Allow**.
 
 ### Python menu-bar app (older macOS)
 

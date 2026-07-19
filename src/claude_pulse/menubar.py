@@ -20,7 +20,9 @@ from pathlib import Path
 from claude_pulse.config import (
     DEFAULT_PLAN,
     PLAN_LIMITS,
+    load_last_live_pct,
     load_saved_plan,
+    save_last_live_pct,
     save_selected_plan,
 )
 from claude_pulse.data.conversations import get_plan_usage
@@ -42,15 +44,21 @@ def render_bar(pct: float, width: int = BAR_WIDTH) -> str:
 def current_usage_pct(use_live: bool = False) -> float:
     """Current usage percent.
 
-    Defaults to the fast local plan estimate (reads log files only). Live
-    utilization is opt-in because reading Anthropic's credential from the
-    keychain triggers a permission prompt from any binary that isn't Claude
-    Code itself — undesirable for an always-running menu-bar tool.
+    With ``use_live``, returns the real 5-hour utilization from Anthropic's
+    usage endpoint. That fetch can fail transiently — after sleep, offline, or
+    when the OAuth token has expired and Claude Code hasn't refreshed it yet.
+    On failure we return the *last known live value* rather than the local plan
+    estimate, which over-counts and reads a misleading 100%.
     """
     if use_live:
         live = get_live_usage()
         if live and live.get("five_hour_pct") is not None:
-            return min(live["five_hour_pct"], 100)
+            pct = min(live["five_hour_pct"], 100)
+            save_last_live_pct(pct)
+            return pct
+        last = load_last_live_pct()
+        if last is not None:
+            return last
     return get_plan_usage(load_saved_plan() or DEFAULT_PLAN)["pct"]
 
 
