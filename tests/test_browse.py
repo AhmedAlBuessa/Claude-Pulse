@@ -1,6 +1,7 @@
 """Tests for the sessions-browser parser."""
 
 import json
+from datetime import datetime, timedelta, timezone
 
 from claude_pulse.data import browse
 from claude_pulse.data.browse import (
@@ -76,9 +77,11 @@ def test_list_sessions_filters_by_window_and_project(tmp_path, monkeypatch):
          "timestamp": "2000-01-01T00:00:00.000Z",
          "message": {"content": "ancient"}},
     ])
+    # Relative to now so the test never rots as the calendar advances.
+    recent_ts = (datetime.now(timezone.utc) - timedelta(days=2)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
     _write_session(new / "fresh.jsonl", [
         {"type": "user", "cwd": "C:/repos/Fresh",
-         "timestamp": "2026-06-12T00:00:00.000Z",
+         "timestamp": recent_ts,
          "message": {"content": "recent work"}},
     ])
 

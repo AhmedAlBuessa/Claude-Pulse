@@ -180,6 +180,36 @@ acp-bar --install     # install a LaunchAgent so it starts on login
 acp-bar --uninstall   # remove it
 ```
 
+### Troubleshooting the number
+
+The bar shows your **real** 5-hour usage. To keep well under the usage endpoint's
+rate limit, it caches the value on disk (~150s) and only re-fetches occasionally.
+If a fetch fails (offline, expired token, or HTTP 429 rate-limiting) it shows your
+last known real value — **never** a made-up number — with a trailing marker:
+
+| Display | Meaning |
+|---|---|
+| `⚡███░░░░░░░ 32%` | live / recently-cached real value |
+| `⚡███░░░░░░░ 32% ·` | last known real value (a fresh fetch failed) |
+| `⚡██████████ 100% ≈` | local estimate (no live value available — e.g. not logged in) |
+
+Run the built-in diagnostic to see exactly what's happening:
+
+```bash
+acp-bar --check
+```
+
+```text
+Menu-bar line : ⚡███░░░░░░░ 32%
+Value source  : live
+Live endpoint : ok — Live usage is working.
+Live 5-hour   : 32%
+Cached value  : 32%  (67s old)
+```
+
+The `≈` estimate only appears when live usage can't be read at all — usually because
+you're not logged in. Run `claude` once to refresh your login, then `acp-bar --check`.
+
 ---
 
 ## ⚙️ Options

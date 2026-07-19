@@ -36,6 +36,7 @@ REASONS = {
     "no_creds": "No Claude credentials found — log in by running `claude` once.",
     "no_oauth": "Credentials found but no subscription token (API-key login has no session limits).",
     "expired": "Your login token expired — run `claude` once to refresh it.",
+    "rate_limited": "Rate-limited by the usage endpoint (HTTP 429) — using the cached value.",
     "network": "Couldn't reach api.anthropic.com (offline, or the endpoint changed).",
 }
 
@@ -107,7 +108,13 @@ def _fetch_usage() -> tuple[dict | None, str]:
         return None, reason
     try:
         raw = _fetch(oauth["accessToken"])
-    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError, ValueError):
+    except urllib.error.HTTPError as e:
+        if e.code == 429:
+            return None, "rate_limited"
+        if e.code in (401, 403):
+            return None, "expired"
+        return None, "network"
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError):
         return None, "network"
 
     fh = raw.get("five_hour") or {}

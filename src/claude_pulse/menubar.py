@@ -11,6 +11,7 @@ Usage::
     acp-bar --uninstall    # remove the LaunchAgent
 """
 
+import json
 import os
 import shutil
 import subprocess
@@ -46,44 +47,88 @@ def render_bar(pct: float, width: int = BAR_WIDTH) -> str:
     return "█" * filled + "░" * (width - filled) + f" {pct:.0f}%"
 
 
-def current_usage_pct(use_live: bool = False) -> float:
-    """Current usage percent.
+def current_usage(use_live: bool = True) -> tuple[float, str]:
+    """Return (percent, source).
 
-    With ``use_live``, returns the real 5-hour utilization from Anthropic's
-    usage endpoint. That fetch can fail transiently — after sleep, offline, or
-    when the OAuth token has expired and Claude Code hasn't refreshed it yet.
-    On failure we return the *last known live value* rather than the local plan
-    estimate, which over-counts and reads a misleading 100%.
+    source is one of:
+      "live"     — a fresh or recently-cached real utilization value
+      "stale"    — a real value that's older than the cache window (fetch failed)
+      "estimate" — the local plan estimate (no live value available at all)
+
+    The real 5-hour utilization comes from Anthropic's usage endpoint. That
+    fetch can fail transiently — after sleep, offline, an expired token, or
+    HTTP 429 rate-limiting. We serve a disk-cached value between fetches so
+    frequent refreshes don't get rate-limited, and fall back to the last good
+    value (not the over-counting estimate) when a fetch fails.
     """
     if use_live:
-        # Serve a recent disk-cached value without hitting the endpoint, so
-        # frequent refreshes don't get rate-limited (HTTP 429).
         cached = load_last_live_pct(max_age_seconds=LIVE_CACHE_TTL)
         if cached is not None:
-            return cached
+            return cached, "live"
         live = get_live_usage()
         if live and live.get("five_hour_pct") is not None:
             pct = min(live["five_hour_pct"], 100)
             save_last_live_pct(pct)
-            return pct
-        # Fetch failed (429, offline, expired token). Show the last good value
-        # rather than the local estimate, which over-counts and reads 100%.
+            return pct, "live"
         last = load_last_live_pct(max_age_seconds=LIVE_STALE_MAX)
         if last is not None:
-            return last
-    return get_plan_usage(load_saved_plan() or DEFAULT_PLAN)["pct"]
+            return last, "stale"
+    return get_plan_usage(load_saved_plan() or DEFAULT_PLAN)["pct"], "estimate"
+
+
+def current_usage_pct(use_live: bool = True) -> float:
+    """Just the percentage (see :func:`current_usage`)."""
+    return current_usage(use_live=use_live)[0]
 
 
 def current_line() -> str:
     """One-line menu-bar string, e.g. ``⚡██████░░░░ 69%``.
 
-    Uses the real live utilization (matches ``claude`` / claude.ai/usage),
-    falling back to the local plan estimate if it can't be read.
+    A trailing marker distinguishes non-live values so a fallback can never be
+    mistaken for real usage: ``·`` = last-known (stale), ``≈`` = local estimate.
     """
     try:
-        return "⚡" + render_bar(current_usage_pct(use_live=True))
+        pct, source = current_usage(use_live=True)
+        marker = {"stale": " ·", "estimate": " ≈"}.get(source, "")
+        return "⚡" + render_bar(pct) + marker
     except Exception:
         return "⚡" + "░" * BAR_WIDTH + " ?%"
+
+
+def print_check() -> None:
+    """Self-diagnostic: explain exactly what the menu bar is showing and why."""
+    import time
+
+    from claude_pulse.config import PULSE_CONFIG_FILE
+    from claude_pulse.data.limits import get_usage_status
+
+    pct, source = current_usage(use_live=True)
+    print(f"Menu-bar line : {current_line()}")
+    print(f"Value source  : {source}")
+
+    status = get_usage_status()
+    print(f"Live endpoint : {status['reason']} — {status['message']}")
+    data = status.get("data") or {}
+    if data.get("five_hour_pct") is not None:
+        print(f"Live 5-hour   : {data['five_hour_pct']:.0f}%")
+
+    cached = load_last_live_pct(max_age_seconds=LIVE_STALE_MAX)
+    if cached is not None and PULSE_CONFIG_FILE.exists():
+        try:
+            data = json.loads(PULSE_CONFIG_FILE.read_text(encoding="utf-8"))
+            age = int(time.time() - data.get("last_live_at", 0))
+            print(f"Cached value  : {cached:.0f}%  ({age}s old)")
+        except (json.JSONDecodeError, OSError):
+            pass
+    else:
+        print("Cached value  : none yet")
+
+    if source == "estimate":
+        print("\nShowing the local ESTIMATE (over-counts). Live usage is "
+              "unavailable — see the reason above.")
+    elif source == "stale":
+        print("\nShowing the last known real value; a fresh fetch failed "
+              "(see the reason above).")
 
 
 def _acp_path() -> str:
@@ -236,6 +281,9 @@ def _build_app():
 
 def main() -> None:
     args = sys.argv[1:]
+    if "--check" in args:
+        print_check()
+        return
     if "--print" in args:
         # Emit a single menu-bar line and exit. Used by the native Swift
         # menu-bar host (macOS renders status items reliably only from a
