@@ -23,7 +23,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = statusItem.button {
-            button.image = tintedLogo(color: colorForPct(nil))  // neutral until first refresh
+            button.image = baseLogo          // the Claude logo, as-is
             button.imagePosition = .imageLeading
             button.imageHugsTitle = true
             button.title = " …"
@@ -48,9 +48,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
             let title = lines.first ?? ""
             let details = Array(lines.dropFirst()).filter { !$0.isEmpty }
-            let pct = self.parsePct(title)
             DispatchQueue.main.async {
-                self.statusItem.button?.image = self.tintedLogo(color: self.colorForPct(pct))
                 self.statusItem.button?.title = " " + (title.isEmpty ? "?%" : title)
                 self.rebuildMenu(details: details)
             }
@@ -108,43 +106,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // ── Claude logo, color-coded by usage % ──────────────────────────────────
 
     private func loadLogo() -> NSImage? {
+        var image: NSImage?
         if let url = Bundle.main.url(forResource: "claude-logo", withExtension: "png") {
-            return NSImage(contentsOf: url)
+            image = NSImage(contentsOf: url)
+        } else {
+            image = NSImage(contentsOfFile: Bundle.main.bundlePath + "/Contents/Resources/claude-logo.png")
         }
-        // Fallback: next to the executable's bundle Resources.
-        let path = Bundle.main.bundlePath + "/Contents/Resources/claude-logo.png"
-        return NSImage(contentsOfFile: path)
-    }
-
-    /// Green (low) → yellow → orange → red (high). Gray when unknown.
-    private func colorForPct(_ pct: Int?) -> NSColor {
-        guard let p = pct else { return .systemGray }
-        switch p {
-        case 90...:    return .systemRed
-        case 70..<90:  return .systemOrange
-        case 40..<70:  return .systemYellow
-        default:       return .systemGreen
-        }
-    }
-
-    /// Recolor the logo silhouette to `color` (keeps the spark shape, drops the orange).
-    private func tintedLogo(color: NSColor, size: CGFloat = 15) -> NSImage? {
-        guard let base = baseLogo else { return nil }
-        let out = NSImage(size: NSSize(width: size, height: size))
-        out.lockFocus()
-        let rect = NSRect(x: 0, y: 0, width: size, height: size)
-        base.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1.0)
-        color.set()
-        rect.fill(using: .sourceAtop)   // paint color only where the logo is opaque
-        out.unlockFocus()
-        out.isTemplate = false          // use our own color, not the system tint
-        return out
-    }
-
-    /// Pull the integer percentage out of a title like "██░░ 48%".
-    private func parsePct(_ text: String) -> Int? {
-        guard let r = text.range(of: #"\d+%"#, options: .regularExpression) else { return nil }
-        return Int(text[r].dropLast())
+        image?.size = NSSize(width: 15, height: 15)
+        image?.isTemplate = false  // keep the logo's own (orange) color
+        return image
     }
 }
 
