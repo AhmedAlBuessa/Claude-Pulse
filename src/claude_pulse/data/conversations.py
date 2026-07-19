@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
-from claude_pulse.config import CLAUDE_DIR
+from claude_pulse.config import CLAUDE_DIR, PLAN_LIMITS
 
 
 PROJECTS_DIR = CLAUDE_DIR / "projects"
@@ -415,3 +415,36 @@ def get_rolling_window_usage(conversations: list[ConversationStats], window_hour
             totals["elapsed_minutes"] = 1
 
     return totals
+
+
+def plan_usage_from_window(window_usage: dict, plan: str) -> dict:
+    """Derive plan usage metrics from an already-computed rolling window.
+
+    Single source of truth for the usage percentage shared by the realtime
+    view and the menu-bar app.
+    """
+    info = PLAN_LIMITS.get(plan, PLAN_LIMITS["max5"])
+    limit = info["output_tokens"]
+    used = window_usage["output_tokens"]
+    pct = min(used / limit * 100, 100) if limit > 0 else 0.0
+    remaining = max(limit - used, 0)
+    return {
+        "pct": pct,
+        "used": used,
+        "limit": limit,
+        "remaining": remaining,
+        "plan_name": info["name"],
+        "window_hours": info["window_hours"],
+    }
+
+
+def get_plan_usage(plan: str) -> dict:
+    """Load conversations and return current plan usage metrics.
+
+    Convenience wrapper for standalone callers (e.g. the menu-bar app) that
+    don't already hold a rolling-window dict.
+    """
+    info = PLAN_LIMITS.get(plan, PLAN_LIMITS["max5"])
+    convs = load_all_conversations()
+    window = get_rolling_window_usage(convs, window_hours=info["window_hours"])
+    return plan_usage_from_window(window, plan)

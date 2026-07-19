@@ -139,6 +139,29 @@ def load_saved_limit() -> int | None:
 
 def save_calibrated_limit(limit: int):
     """Save calibrated limit to config."""
+    _update_config({"calibrated_limit": limit})
+
+
+def load_saved_plan() -> str | None:
+    """Load the plan selected in the menu bar from saved config."""
+    if not PULSE_CONFIG_FILE.exists():
+        return None
+    try:
+        data = json.loads(PULSE_CONFIG_FILE.read_text(encoding="utf-8"))
+        plan = data.get("plan")
+        return plan if plan in PLAN_LIMITS else None
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def save_selected_plan(plan: str):
+    """Persist the plan selected in the menu bar."""
+    if plan in PLAN_LIMITS:
+        _update_config({"plan": plan})
+
+
+def _update_config(updates: dict):
+    """Merge updates into the shared config file."""
     PULSE_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     data = {}
     if PULSE_CONFIG_FILE.exists():
@@ -146,5 +169,5 @@ def save_calibrated_limit(limit: int):
             data = json.loads(PULSE_CONFIG_FILE.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             pass
-    data["calibrated_limit"] = limit
+    data.update(updates)
     PULSE_CONFIG_FILE.write_text(json.dumps(data, indent=2), encoding="utf-8")

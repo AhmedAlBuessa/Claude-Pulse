@@ -30,10 +30,12 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=7.0"]
+menubar = ["rumps>=0.4"]
 
 [project.scripts]
 acp = "claude_pulse.cli:main"
 claude-pulse = "claude_pulse.cli:main"
+acp-bar = "claude_pulse.menubar:main"
 
 [project.urls]
 Homepage = "https://github.com/AhmedAlBuessa/Claude-Pulse"

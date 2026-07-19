@@ -13,9 +13,9 @@
 [![Status](https://img.shields.io/badge/status-beta-f59e0b?style=flat-square)](#)
 [![Made for Claude Code](https://img.shields.io/badge/made%20for-Claude%20Code-D97757?style=flat-square)](https://claude.com/claude-code)
 
-**Real-time insights · Daily & monthly breakdowns · Cost tracking · Plan limits**
+**Real-time insights · Daily & monthly breakdowns · Cost tracking · Plan limits · macOS menu bar**
 
-[Installation](#-installation) · [Usage](#-usage) · [Features](#-features) · [Options](#%EF%B8%8F-options) · [License](#-license)
+[Installation](#-installation) · [Usage](#-usage) · [Menu Bar](#-macos-menu-bar) · [Features](#-features) · [Options](#%EF%B8%8F-options) · [License](#-license)
 
 </div>
 
@@ -30,6 +30,7 @@
 | 📆 **Monthly Summary** | At-a-glance totals across each month |
 | 💰 **Cost Tracking** | Estimated spend by model, in real dollars |
 | 🎯 **Live Plan Limits** | Real 5-hour & weekly usage, same numbers as `claude` and claude.ai/usage |
+| 🍎 **macOS Menu Bar** | Live usage bar in the menu bar — `░░░…░ 1%` — with auto-start on login |
 | 🎨 **Themes** | Light, dark, or auto — matches your terminal |
 | 📁 **Project Filters** | Slice usage by working directory |
 | 🕘 **Session Resume** | Browse past sessions and jump back into one |
@@ -75,6 +76,15 @@ pip install claude-pulse
 > 💡 Two CLI aliases are installed: **`acp`** (recommended) and **`claude-pulse`**.
 >
 > 🪟 **Windows:** if `pip` isn't recognized, your Python `Scripts` folder isn't on `PATH`. Use `py -m pip install …` instead, or add `…\PythonXXX\Scripts` to `PATH`.
+
+For the macOS menu-bar app, install with the optional **`menubar`** extra:
+
+```bash
+uv tool install "claude-pulse[menubar] @ git+https://github.com/AhmedAlBuessa/Claude-Pulse"
+# …or: pip install "claude-pulse[menubar] @ git+https://github.com/AhmedAlBuessa/Claude-Pulse"
+```
+
+> 💡 This adds a third command, **`acp-bar`** (macOS only). Once on PyPI: `uv tool install 'claude-pulse[menubar]'`.
 
 ---
 
@@ -132,6 +142,33 @@ acp --calibrate 9         # offline fallback: pin the baseline to the % on claud
 
 ---
 
+## 🍎 macOS Menu Bar
+
+Keep a live usage bar in your menu bar (macOS only — requires the [`menubar` extra](#-installation)):
+
+```bash
+acp-bar
+```
+
+You'll see your current 5-hour usage right in the menu bar:
+
+```text
+░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ 1%
+```
+
+It shows your **real** utilization from Anthropic's usage endpoint — the same number as `claude` and claude.ai/usage — and falls back to the local plan estimate if you're not logged in. It refreshes every 60 seconds. From its dropdown you can **switch plan** (Pro · Max 5x · Max 20x, used for the fallback estimate — the choice is remembered), **refresh now**, or **open the full dashboard** in Terminal.
+
+### Start automatically on login
+
+```bash
+acp-bar --install     # install a LaunchAgent so the bar starts on login
+acp-bar --uninstall   # remove it
+```
+
+> 💡 The bar is 30 blocks wide by default to match a full-width look. If macOS truncates it, lower `BAR_WIDTH` in `src/claude_pulse/menubar.py` (e.g. to `10`–`15`).
+
+---
+
 ## ⚙️ Options
 
 | Flag | Description | Default |
@@ -175,7 +212,7 @@ For the **live plan-usage** bar it makes one request to Anthropic's own usage en
 ```bash
 git clone https://github.com/AhmedAlBuessa/Claude-Pulse
 cd Claude-Pulse
-uv sync --extra dev
+uv sync --extra dev --extra menubar   # drop --extra menubar if not on macOS
 uv run pytest
 ```
 
