@@ -150,6 +150,8 @@ Keep a live usage bar in your menu bar — the Claude mark next to a compact bar
 ✳ ██████░░░░ 69%
 ```
 
+The Claude spark is **color-coded by usage**: green (< 40%) → yellow (< 70%) → orange (< 90%) → red (≥ 90%).
+
 Click it for the full breakdown, mirroring claude.ai/usage:
 
 ```text

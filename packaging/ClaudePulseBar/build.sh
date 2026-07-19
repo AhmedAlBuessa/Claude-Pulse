@@ -9,9 +9,10 @@ MACOS="$APP/Contents/MacOS"
 
 echo "Building $APP"
 rm -rf "$APP"
-mkdir -p "$MACOS"
+mkdir -p "$MACOS" "$APP/Contents/Resources"
 
 swiftc -O -o "$MACOS/ClaudePulseBar" "$SRC_DIR/main.swift" -framework Cocoa
+cp "$SRC_DIR/claude-logo.png" "$APP/Contents/Resources/claude-logo.png"
 
 cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>

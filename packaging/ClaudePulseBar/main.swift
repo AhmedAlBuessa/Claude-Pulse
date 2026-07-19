@@ -10,6 +10,7 @@ import Cocoa
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var timer: Timer?
+    private var baseLogo: NSImage?
 
     private let acpBar = NSHomeDirectory() + "/.local/bin/acp-bar"
     private let acp = NSHomeDirectory() + "/.local/bin/acp"
@@ -18,9 +19,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)  // menu-bar only, no Dock icon
 
+        baseLogo = loadLogo()
+
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = statusItem.button {
-            button.image = Self.claudeLogo()      // the Claude sunburst, not a ⚡
+            button.image = tintedLogo(color: colorForPct(nil))  // neutral until first refresh
             button.imagePosition = .imageLeading
             button.imageHugsTitle = true
             button.title = " …"
@@ -45,7 +48,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
             let title = lines.first ?? ""
             let details = Array(lines.dropFirst()).filter { !$0.isEmpty }
+            let pct = self.parsePct(title)
             DispatchQueue.main.async {
+                self.statusItem.button?.image = self.tintedLogo(color: self.colorForPct(pct))
                 self.statusItem.button?.title = " " + (title.isEmpty ? "?%" : title)
                 self.rebuildMenu(details: details)
             }
@@ -100,38 +105,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    // ── Claude sunburst logo (template image, adapts to light/dark) ──────────
+    // ── Claude logo, color-coded by usage % ──────────────────────────────────
 
-    private static func claudeLogo(diameter: CGFloat = 15) -> NSImage {
-        let image = NSImage(size: NSSize(width: diameter, height: diameter))
-        image.lockFocus()
-
-        let c = CGPoint(x: diameter / 2, y: diameter / 2)
-        let rays = 11
-        let inner = diameter * 0.10
-        let outer = diameter * 0.48
-        let halfBase = diameter * 0.05
-        NSColor.black.setFill()
-
-        for i in 0..<rays {
-            let a = (CGFloat(i) / CGFloat(rays)) * 2 * .pi - .pi / 2
-            let perp = a + .pi / 2
-            let tip = CGPoint(x: c.x + cos(a) * outer, y: c.y + sin(a) * outer)
-            let b1 = CGPoint(x: c.x + cos(a) * inner + cos(perp) * halfBase,
-                             y: c.y + sin(a) * inner + sin(perp) * halfBase)
-            let b2 = CGPoint(x: c.x + cos(a) * inner - cos(perp) * halfBase,
-                             y: c.y + sin(a) * inner - sin(perp) * halfBase)
-            let spike = NSBezierPath()
-            spike.move(to: b1)
-            spike.line(to: tip)
-            spike.line(to: b2)
-            spike.close()
-            spike.fill()
+    private func loadLogo() -> NSImage? {
+        if let url = Bundle.main.url(forResource: "claude-logo", withExtension: "png") {
+            return NSImage(contentsOf: url)
         }
+        // Fallback: next to the executable's bundle Resources.
+        let path = Bundle.main.bundlePath + "/Contents/Resources/claude-logo.png"
+        return NSImage(contentsOfFile: path)
+    }
 
-        image.unlockFocus()
-        image.isTemplate = true  // menu bar tints it for light/dark automatically
-        return image
+    /// Green (low) → yellow → orange → red (high). Gray when unknown.
+    private func colorForPct(_ pct: Int?) -> NSColor {
+        guard let p = pct else { return .systemGray }
+        switch p {
+        case 90...:    return .systemRed
+        case 70..<90:  return .systemOrange
+        case 40..<70:  return .systemYellow
+        default:       return .systemGreen
+        }
+    }
+
+    /// Recolor the logo silhouette to `color` (keeps the spark shape, drops the orange).
+    private func tintedLogo(color: NSColor, size: CGFloat = 15) -> NSImage? {
+        guard let base = baseLogo else { return nil }
+        let out = NSImage(size: NSSize(width: size, height: size))
+        out.lockFocus()
+        let rect = NSRect(x: 0, y: 0, width: size, height: size)
+        base.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1.0)
+        color.set()
+        rect.fill(using: .sourceAtop)   // paint color only where the logo is opaque
+        out.unlockFocus()
+        out.isTemplate = false          // use our own color, not the system tint
+        return out
+    }
+
+    /// Pull the integer percentage out of a title like "██░░ 48%".
+    private func parsePct(_ text: String) -> Int? {
+        guard let r = text.range(of: #"\d+%"#, options: .regularExpression) else { return nil }
+        return Int(text[r].dropLast())
     }
 }
 
